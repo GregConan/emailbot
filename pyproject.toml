@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "emailbot"
+version = "0.1.0"
+description = ""
+authors = ["Greg Conan <gregmconan@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+cryptography = "^44.0.0"
+oauth2 = "^1.9.0.post1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
