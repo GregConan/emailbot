@@ -160,12 +160,12 @@ class Promptionary(LazyDict, Debuggable):
         self.debugging = debugging
         super().__init__(*args, **kwargs)
 
-    def get_or_prompt_for(self, key: str, prompt_fn: Callable,
+    def get_or_prompt_for(self, key: Hashable, prompt_fn: Callable,
                           prompt: str) -> Any:
         """Given a key, return the value mapped to it if one already exists; \
         otherwise prompt the user to interactively provide it and return that.
 
-        :param key: str mapped to the value to retrieve
+        :param key: Hashable mapped to the value to retrieve
         :param prompt_fn: Callable, function to interactively prompt the \
                           user to provide the value, such as `input` or \
                           `getpass.getpass`
@@ -175,13 +175,13 @@ class Promptionary(LazyDict, Debuggable):
         """
         return self.lazyget(key, prompt_fn, [prompt])
 
-    def setdefault_or_prompt_for(self, key: str, prompt_fn: Callable,
+    def setdefault_or_prompt_for(self, key: Hashable, prompt_fn: Callable,
                                  prompt: str) -> Any:
         """Given a key, return the value mapped to it if one already exists; \
         otherwise prompt the user to interactively provide it, store the \
         provided value by mapping it to key, and return that value.
 
-        :param key: str mapped to the value to retrieve
+        :param key: Hashable mapped to the value to retrieve
         :param prompt_fn: Callable, function to interactively prompt the \
                           user to provide the value, such as `input` or \
                           `getpass.getpass`

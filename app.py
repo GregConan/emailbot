@@ -9,36 +9,40 @@ Updated: 2025-01-24
 # Import standard libraries
 import argparse
 from getpass import getpass
-import imaplib
 import pdb
+import sys
+from typing import Any, Dict
 
 # Import local custom libraries
+from emailbot.constants import TEMPLATE_ACCEPT, TEMPLATE_REJECT
 from emailbot.CustomDicts import Cryptionary
 from emailbot.GmailIMAPFetcher import GmailIMAPFetcher
 
 
 def main():
-    creds = get_creds()
+    cli_args = get_cli_args()
+    creds = get_credentials(cli_args)
+    gmail = GmailIMAPFetcher(debugging=cli_args["debugging"])
+    gmail.login_with(creds)
+    if gmail.is_logged_out():
+        sys.exit(1)
+    gmail.load_templates_from(TEMPLATE_ACCEPT, TEMPLATE_REJECT)
 
-    try:
-        gmail = GmailIMAPFetcher()
-    except imaplib.IMAP4.error as err:
-        creds.debug_or_raise(err, locals())
-    gmail.login(creds["address"], creds["password"])
+    inbox_emails = gmail.get_emails_from()
+    # creds.debug_or_raise(err, locals())
 
     pdb.set_trace()
     print("done")
 
 
-def get_creds(parser: argparse.ArgumentParser | None = None
-              ) -> Cryptionary:
+def get_cli_args(parser: argparse.ArgumentParser | None = None
+                 ) -> Dict[str, Any]:
     """
     :param parser: argparse.ArgumentParser to get command-line input arguments
-    :return: Cryptionary containing a Gmail account's login credentials
+    :return: Dict[str, Any], all arguments collected from the command line
     """
     MSG_CRED = ("Your Gmail account {0}. If you don't include this argument, "
                 "then you will be prompted to enter your {0} manually.")
-    PROMPT = "Please enter your Gmail %s: "
 
     # Collect command-line input arguments
     if not parser:
@@ -61,13 +65,22 @@ def get_creds(parser: argparse.ArgumentParser | None = None
         dest="password",
         help=MSG_CRED.format("password")
     )
+    return vars(parser.parse_args())
 
+
+def get_credentials(cli_args: Dict[str, Any]) -> Cryptionary:
+    """
+    :param parser: argparse.ArgumentParser to get command-line input arguments
+    :return: Cryptionary containing a Gmail account's login credentials
+    """
     # Save credentials and settings into a custom encrypted dictionary
-    creds = Cryptionary(**vars(parser.parse_args()))
+    creds = Cryptionary(**cli_args)
+
+    # Prompt user for Gmail credentials if they didn't provide them as
+    # command-line arguments
+    PROMPT = "Please enter your Gmail %s: "
     creds.setdefault_or_prompt_for("address", input, PROMPT % "address")
     creds.setdefault_or_prompt_for("password", getpass, PROMPT % "password")
-    # TODO Implement Oauth2? https://stackoverflow.com/a/5366380
-    # https://support.google.com/accounts/answer/185833
     return creds
 
 

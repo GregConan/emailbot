@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import pdb
+from string import Template
 import sys
 from typing import (Any, Callable, Dict, Hashable, Iterable, List,
                     Mapping, Optional, SupportsBytes, Tuple)
@@ -128,13 +129,33 @@ def default_pop(poppable: Any, key: Any = None,
     return to_return
 
 
-def extract_from_json(json_path: str):
+def extract_from_json(json_path: str) -> dict:
     """
-    :param json_path: String, a valid path to a real readable .json file
-    :return: Dictionary, the contents of the file at json_path
+    :param json_path: str, a valid path to a real readable .json file
+    :return: dict, the contents of the file at json_path
     """
-    with open(json_path, 'r') as infile:
+    with open(json_path) as infile:
         return json.load(infile)
+
+
+def is_peelable(an_obj: Any) -> bool:
+    result = False
+    # return isinstance(an_obj, Iterable) and not isinstance(an_obj, Hashable)
+    if isinstance(an_obj, Iterable):
+        primitivity = [hasattr(an_obj, "__mod__"),  # ONLY in primitives
+                       not hasattr(an_obj, "__class_getitem__"),  # NOT in them
+                       isinstance(an_obj, Hashable)]
+        result = primitivity.count(True) < 2
+    return result
+
+
+def load_template_from(txt_file_path: str) -> Template:
+    """
+    :param txt_file_path: str, valid path to readable .txt file
+    :return: string.Template loaded from the file at txt_file_path
+    """
+    with open(txt_file_path) as infile:
+        return Template(infile.read())
 
 
 # TODO Replace "print()" calls with "log()" calls after making log calls
@@ -157,7 +178,42 @@ def noop(*_args: Any, **_kwargs: Any) -> None:
     pass  # or `...`
 
 
-def show_keys_in(a_dict: Mapping[str, Any],  # show: Callable = log
+def peel(to_peel: Iterable) -> Any:  # , maxdepth: int | None = None
+    max_len = 3
+    while is_peelable(to_peel) and len(to_peel) < max_len:
+        match len(to_peel):
+            case 1:
+                try:
+                    _, to_peel = to_peel.popitem()
+                except AttributeError:
+                    to_peel = next(iter(to_peel))
+            case 2:
+                try:
+                    # can_peel = [is_peelable(to_peel[ix]) for ix in range(len(to_peel))]
+                    can_peel = [is_peelable(to_peel[0]),
+                                is_peelable(to_peel[1])]
+                    if can_peel[0] != can_peel[1]:
+                        to_peel = to_peel[0 if can_peel[0] else 1]
+                    else:
+                        to_peel = to_peel[0 if len(to_peel[0])
+                                          > len(to_peel[1]) else 1]
+                except KeyError:
+                    max_len = 2  # Only peel a len < 2 Mapping
+            case _:
+                pass  # If len > 3 then stop peeling
+    return to_peel
+
+
+def print_keys_in(a_dict: Mapping, what_keys_are: str = "Local variables"
+                  ) -> None:
+    """
+    :param a_dict: Dictionary mapping strings to anything
+    :param what_keys_are: String naming what the keys are
+    """
+    print(f"{what_keys_are}: {stringify_list(uniqs_in(a_dict))}")
+
+
+def show_keys_in(a_dict: Mapping[str, Any],  # show: Callable = print,
                  what_keys_are: str = "Local variables",
                  level: int = logging.INFO,
                  logger_name: str = LOGGER_NAME) -> None:
