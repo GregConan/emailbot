@@ -5,37 +5,24 @@
 Useful/convenient custom extensions of Python's dictionary class.
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-23
-Updated: 2025-01-24
+Updated: 2025-02-21
 """
 # Import standard libraries
-from collections import defaultdict, UserDict
+from collections import UserDict
 import pdb
-from typing import (Any, Callable, Dict, Hashable, Iterable, List,
-                    Mapping, Optional, SupportsBytes, Tuple)
+from typing import (Any, Callable, Container, Dict, Hashable, Iterable, List,
+                    Mapping, Sequence, Set, SupportsBytes, Tuple)
 
 # Import third-party PyPI libraries
 from cryptography.fernet import Fernet
 
 # Import local custom libraries
 try:
-    from utilities import (Bytesifier, Debuggable, noop)
+    from seq import Bytesifier
+    from debugging import Debuggable, noop
 except ModuleNotFoundError:
-    from emailbot.utilities import (Bytesifier, Debuggable, noop)
-
-
-class AttributeDict(defaultdict):  # TODO Remove this class?
-    # From https://stackoverflow.com/a/41274937
-    def __init__(self):
-        super(AttributeDict, self).__init__(AttributeDict)
-
-    def __getattr__(self, key):
-        try:
-            return self[key]
-        except KeyError:
-            raise AttributeError(key)
-
-    def __setattr__(self, key, value):
-        self[key] = value
+    from emailbot.seq import Bytesifier
+    from emailbot.debugging import Debuggable, noop
 
 
 class LazyDict(UserDict):
@@ -230,12 +217,15 @@ class Cryptionary(Promptionary, Bytesifier):  # , Debuggable
 
         :param dict_key: Hashable, key mapped to the value to retrieve
         :param dict_value: SupportsBytes, _description_
-        :return: _type_, _description_
+        :return: None
         """
-        if self.can_bytesify(dict_value):
-            dict_value = self.cryptor.encrypt(self.bytesify(dict_value))
-            self.encrypted.add(dict_key)
-        return super().__setitem__(dict_key, dict_value)
+        try:
+            if self.can_bytesify(dict_value):
+                dict_value = self.cryptor.encrypt(self.bytesify(dict_value))
+                self.encrypted.add(dict_key)
+            return super().__setitem__(dict_key, dict_value)
+        except AttributeError as err:
+            self.debug_or_raise(err, locals())
 
     def __delitem__(self, key: Hashable) -> None:
         """Delete self[key]. 

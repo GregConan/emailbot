@@ -9,6 +9,8 @@ readme = "README.md"
 python = "^3.10"
 cryptography = "^44.0.0"
 oauth2 = "^1.9.0.post1"
+beautifulsoup4 = "^4.12.3"
+selenium = "^4.28.1"
 
 
 [build-system]
