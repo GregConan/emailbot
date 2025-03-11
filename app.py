@@ -4,7 +4,7 @@
 Gmail Bot
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-23
-Updated: 2025-02-21
+Updated: 2025-03-04
 """
 # Import standard libraries
 import argparse
@@ -16,8 +16,10 @@ from typing import Any, Dict
 # Import local custom libraries
 from emailbot.constants import TEMPLATES
 from emailbot.Gmailer import Gmailer
+from emailbot.IO import add_new_out_dir_arg_to, Valid
 from emailbot.LazyDicts import Cryptionary
-from emailbot.LinkedInBot import LinkedInBot
+from emailbot.LinkedInBot import FFOptions, LinkedInBot
+from emailbot.seq import Xray  # Invaluable for debugging
 
 
 def main():
@@ -40,11 +42,17 @@ def main():
             print("done")
 
         case "linkedin":
-            bot = LinkedInBot()
-            bot.login(creds["address"], creds["password"])
+            options = FFOptions(  # "--safe-mode", "--allow-downgrade",
+                profile_dir=cli_args["ff_profile"],
+                headless=True)
+            with LinkedInBot(debugging=cli_args["debugging"],
+                             options=options,
+                             out_dir_path=cli_args["output"]) as bot:
+                pdb.set_trace()
+                bot.login(creds["address"], creds["password"])
 
-            pdb.set_trace()
-            print("done")
+                pdb.set_trace()
+                print("done")
 
 
 def get_cli_args(parser: argparse.ArgumentParser | None = None
@@ -80,10 +88,18 @@ def get_cli_args(parser: argparse.ArgumentParser | None = None
         metavar="EMAIL_ADDRESS",
         help=MSG_CRED.format("address")
     )
+    parser = add_new_out_dir_arg_to(parser, "out", dest="output",
+                                    metavar="OUTPUT_DIRECTORY")
     parser.add_argument(
         "-p", "-pass", "--password",
         dest="password",
         help=MSG_CRED.format("password")
+    )
+    parser.add_argument(
+        "-fp", "-profile", "--profile", "--ff-profile", "--profile-path",
+        dest="ff_profile",
+        metavar="FIREFOX_PROFILE_PATH"
+        # type=Valid.readable_file
     )
     return vars(parser.parse_args())
 
@@ -94,7 +110,8 @@ def get_credentials(cli_args: Dict[str, Any]) -> Cryptionary:
     :return: Cryptionary containing a Gmail account's login credentials
     """
     # Save credentials and settings into a custom encrypted dictionary
-    creds = Cryptionary(**cli_args)
+    creds = Cryptionary(**{k: cli_args[k] for k in
+                           ("address", "debugging", "password")})
 
     # Prompt user for Gmail credentials if they didn't provide them as
     # command-line arguments

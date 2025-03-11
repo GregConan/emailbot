@@ -11,6 +11,8 @@ cryptography = "^44.0.0"
 oauth2 = "^1.9.0.post1"
 beautifulsoup4 = "^4.12.3"
 selenium = "^4.28.1"
+webdriver-manager = "^4.0.2"
+pathvalidate = "^3.2.3"
 
 
 [build-system]
