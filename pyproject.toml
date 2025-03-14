@@ -13,8 +13,13 @@ beautifulsoup4 = "^4.12.3"
 selenium = "^4.28.1"
 webdriver-manager = "^4.0.2"
 pathvalidate = "^3.2.3"
+google-api-python-client = "^2.163.0"
+google-auth-httplib2 = "^0.2.0"
+google-auth-oauthlib = "^1.2.1"
+gspread = "^6.2.0"
+gconanpy = {git = "https://github.com/GregConan/gconanpy.git", rev = "v0.1.0"}
 
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core", "setuptools"]
 build-backend = "poetry.core.masonry.api"

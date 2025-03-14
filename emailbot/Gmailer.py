@@ -4,7 +4,7 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-02-21
+Updated: 2025-03-13
 """
 # Import standard libraries
 import datetime as dt
@@ -16,20 +16,21 @@ import imaplib
 import os
 import pdb
 import re
-from typing import Any, List, Mapping
+from typing import Any, Callable, Dict, Iterable, List, Mapping
 
-# Import third-party PyPI libraries
-# from bs4 import BeautifulSoup
+# Import remote custom libraries
+from gconanpy.debug import Debuggable
+from gconanpy.dissectors import Peeler, Xray
+from gconanpy.io.local import LoadedTemplate
+from gconanpy.seq import stringify
 
-# Import local custom libraries
+# Import local custom libraries and constants
 try:
-    from seq import Peeler, stringify
-    from debugging import Debuggable
-    from IO import LoadedTemplate
+    from constants import LINKEDIN_EMAIL
+    from GoogleSheetUpdater import GoogleSheetUpdater, LinkedInJob
 except ModuleNotFoundError:
-    from emailbot.seq import Peeler, stringify
-    from emailbot.debugging import Debuggable
-    from emailbot.IO import LoadedTemplate
+    from emailbot.constants import LINKEDIN_EMAIL
+    from emailbot.GoogleSheetUpdater import GoogleSheetUpdater, LinkedInJob
 
 
 # NOTE: Very much a work in progress.
@@ -89,7 +90,6 @@ class Gmailer(Debuggable):
     MSG_FMT: str = "(RFC822)"
 
     def __init__(self, imap_URL: str = "imap.gmail.com",
-                 # , address: str, password: str):
                  debugging: bool = False) -> None:
         """
         :param imap_URL: str, host URL to connect to using IMAP4 client. \
@@ -130,6 +130,44 @@ class Gmailer(Debuggable):
         return email.message_from_bytes(
             s=Peeler.core(self.con.fetch(msg_ID, msg_parts)),
             _class=EmailMessage)
+
+    @staticmethod
+    def parse_msg(msg: EmailMessage):
+        # msg.get_  # TODO
+        msgstr = msg.as_string().replace("\r", "")
+        despaced = msgstr.replace("\n", "")
+        start_ix = despaced.find('<html')
+        end_ix = despaced.rfind("</html>") + 7  # +len("</html>")
+
+    @staticmethod
+    def get_body_of(msg: EmailMessage) -> str:
+        """ https://stackoverflow.com/a/32840516
+
+        :param msg: EmailMessage to get body content of
+        :return: str, body content of msg
+        """
+        body = ""
+
+        # not multipart - i.e. plain text, no attachments, keeping fingers crossed
+        if not msg.is_multipart():
+            body = msg.get_payload(decode=True)
+
+        else:
+            walker = msg.walk()
+            part = next(walker, None)
+            while part and not body:  # for part in msg.walk():
+                part = next(walker, None)
+                ctype = part.get_content_type()
+                cdispo = str(part.get('Content-Disposition'))
+
+                # skip any text/plain (txt) attachments
+                if ctype == 'text/plain' and 'attachment' not in cdispo:
+
+                    body = part.get_payload(decode=True)
+        # Decode and return body content
+        if hasattr(body, "decode"):
+            body = body.decode("utf-8")
+        return body
 
     def get_emails_from(self, address: str | None = None, key: str = "ALL",
                         value: Any = None, folder: str = "Inbox",
@@ -199,16 +237,20 @@ class Gmailer(Debuggable):
         address = credentials["address"]
         password = credentials.get("password")
         PROMPT_FMT = "\nPlease {}enter your password or press Enter to quit: "
-        while self.is_logged_out():
-            if err or not password:
-                PROMPT = "Incorrect email address or password. Failed " \
-                    f"to login to {address}:\n{stringify(err.args[0])}" + \
-                    PROMPT_FMT.format("re") if err else PROMPT_FMT.format("")
-                password = getpass(PROMPT)
-            if not password:
-                break
-            else:
-                err = self.login(address, password)
+        try:
+            while self.is_logged_out():
+                if err or not password:
+                    PROMPT = "Incorrect email address or password. Failed " \
+                        f"to login to {address}:\n{stringify(err.args[0])}" + \
+                        PROMPT_FMT.format(
+                            "re") if err else PROMPT_FMT.format("")
+                    password = getpass(PROMPT)
+                if not password:
+                    break
+                else:
+                    err = self.login(address, password)
+        except TypeError as err:
+            self.debug_or_raise(err, locals())
 
     def search(self, key: str, value: Any) -> Any:
         """ Search the contents of a Gmail account to find a key-value pair.
@@ -218,3 +260,30 @@ class Gmailer(Debuggable):
         :return: Any, _description_
         """
         return Peeler.core(self.con.search(None, key, f'"{value}"'))
+
+
+class Jobmailer(Gmailer):
+    MSG_FMT: str = "(RFC822)"
+
+    def __init__(self, imap_URL: str = "imap.gmail.com",
+                 # , address: str, password: str):
+                 updater: GoogleSheetUpdater | None = None,
+                 debugging: bool = False) -> None:
+        """
+        :param imap_URL: str, host URL to connect to using IMAP4 client. \
+                         Defaults to "imap.gmail.com"
+        """
+        super().__init__(imap_URL=imap_URL, debugging=debugging)
+
+        # Class to update Google Sheet using details from emails
+        self.updater = updater
+
+    def check_linkedin_emails(self, how_many: int = 1):
+        if not self.updater:
+            self.updater = GoogleSheetUpdater(debugging=self.debugging)
+        jobs = list()
+        for unread_job_email in self.get_emails_from(
+            address=LINKEDIN_EMAIL, key="UNSEEN", how_many=how_many
+        ):
+            jobs.append(LinkedInJob.fromGmailMsg(unread_job_email))
+            self.updater.add_job_row(jobs[-1])

@@ -4,7 +4,7 @@
 Gmail Bot
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-23
-Updated: 2025-03-04
+Updated: 2025-03-13
 """
 # Import standard libraries
 import argparse
@@ -13,13 +13,15 @@ import pdb
 import sys
 from typing import Any, Dict
 
-# Import local custom libraries
+# Import remote custom libraries
+from gconanpy.cli import add_new_out_dir_arg_to, Valid
+from gconanpy.dissectors import Xray
+from gconanpy.maps import Cryptionary
+
+# Import local custom libraries and constants
 from emailbot.constants import TEMPLATES
-from emailbot.Gmailer import Gmailer
-from emailbot.IO import add_new_out_dir_arg_to, Valid
-from emailbot.LazyDicts import Cryptionary
+from emailbot.Gmailer import Jobmailer  # Gmailer,
 from emailbot.LinkedInBot import FFOptions, LinkedInBot
-from emailbot.seq import Xray  # Invaluable for debugging
 
 
 def main():
@@ -28,14 +30,18 @@ def main():
 
     match cli_args["run_mode"]:
         case "gmail":
-            gmail = Gmailer(debugging=cli_args["debugging"])
+
+            # Connect to Gmail and set up Gmail interactor
+            gmail = Jobmailer(debugging=cli_args["debugging"])
             gmail.login_with(creds)
             if gmail.is_logged_out():
                 sys.exit(1)
             gmail.load_templates_from(*TEMPLATES)
 
             pdb.set_trace()
-            inbox_emails = gmail.get_emails_from()
+
+            gmail.check_linkedin_emails()
+            # inbox_emails = gmail.get_emails_from()
             # creds.debug_or_raise(err, locals())
 
             pdb.set_trace()
