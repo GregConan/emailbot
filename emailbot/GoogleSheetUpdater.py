@@ -28,7 +28,7 @@ from gspread.utils import ValueInputOption
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
 from gconanpy.dissectors import Xray
-from gconanpy.io.local import save_to_json
+from gconanpy.IO.local import save_to_json
 from gconanpy.seq import as_HTTPS_URL
 
 # Import local constants

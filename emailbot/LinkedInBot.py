@@ -26,8 +26,8 @@ from webdriver_manager.firefox import GeckoDriverManager
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
 from gconanpy.dissectors import Xray
-from gconanpy.io.local import save_to_json
-from gconanpy.io.web import extract_params_from_url
+from gconanpy.IO.local import save_to_json
+from gconanpy.IO.web import extract_params_from_url
 from gconanpy.seq import to_file_path
 
 # Import local constants

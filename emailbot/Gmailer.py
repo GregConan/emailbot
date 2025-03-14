@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
 from gconanpy.dissectors import Peeler, Xray
-from gconanpy.io.local import LoadedTemplate
+from gconanpy.IO.local import LoadedTemplate
 from gconanpy.seq import stringify
 
 # Import local custom libraries and constants
