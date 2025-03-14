@@ -14,7 +14,7 @@ import sys
 from typing import Any, Dict
 
 # Import remote custom libraries
-from gconanpy.cli import add_new_out_dir_arg_to, Valid
+from gconanpy.cli import add_new_out_dir_arg_to
 from gconanpy.dissectors import Xray
 from gconanpy.maps import Cryptionary
 
