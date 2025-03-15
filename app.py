@@ -4,7 +4,7 @@
 Gmail Bot
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-23
-Updated: 2025-03-13
+Updated: 2025-03-14
 """
 # Import standard libraries
 import argparse
@@ -15,6 +15,7 @@ from typing import Any, Dict
 
 # Import remote custom libraries
 from gconanpy.cli import add_new_out_dir_arg_to
+from gconanpy.debug import ShowTimeTaken
 from gconanpy.dissectors import Xray
 from gconanpy.maps import Cryptionary
 
@@ -30,22 +31,16 @@ def main():
 
     match cli_args["run_mode"]:
         case "gmail":
-
             # Connect to Gmail and set up Gmail interactor
             gmail = Jobmailer(debugging=cli_args["debugging"])
             gmail.login_with(creds)
             if gmail.is_logged_out():
                 sys.exit(1)
+
             gmail.load_templates_from(*TEMPLATES)
 
-            pdb.set_trace()
-
-            gmail.check_linkedin_emails()
-            # inbox_emails = gmail.get_emails_from()
-            # creds.debug_or_raise(err, locals())
-
-            pdb.set_trace()
-            print("done")
+            with ShowTimeTaken("updating LinkedIn job apps Google Sheet"):
+                gmail.check_linkedin_emails()
 
         case "linkedin":
             options = FFOptions(  # "--safe-mode", "--allow-downgrade",
@@ -56,7 +51,6 @@ def main():
                              out_dir_path=cli_args["output"]) as bot:
                 pdb.set_trace()
                 bot.login(creds["address"], creds["password"])
-
                 pdb.set_trace()
                 print("done")
 
@@ -116,8 +110,8 @@ def get_credentials(cli_args: Dict[str, Any]) -> Cryptionary:
     :return: Cryptionary containing a Gmail account's login credentials
     """
     # Save credentials and settings into a custom encrypted dictionary
-    creds = Cryptionary(**{k: cli_args[k] for k in
-                           ("address", "debugging", "password")})
+    creds = Cryptionary.from_subset_of(cli_args, "address", "debugging",
+                                       "password", keep_empties=False)
 
     # Prompt user for Gmail credentials if they didn't provide them as
     # command-line arguments

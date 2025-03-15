@@ -4,7 +4,7 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-03-13
+Updated: 2025-03-14
 """
 # Import standard libraries
 import datetime as dt
@@ -16,7 +16,11 @@ import imaplib
 import os
 import pdb
 import re
-from typing import Any, Callable, Dict, Iterable, List, Mapping
+from typing import Any, Callable, Iterable, Mapping
+import xml.etree.ElementTree as ETree
+
+# Import third-party PyPI libraries
+from bs4 import BeautifulSoup
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
@@ -74,7 +78,7 @@ class ReplyTo(EmailMessage, Debuggable):
         except AssertionError as err:
             self.debug_or_raise(err, locals())
 
-    def get_name(self) -> List[str]:  # , msg: EmailMessage
+    def get_name(self) -> list[str]:  # , msg: EmailMessage
         return [re.sub(r'[^a-zA-Z]', '', x)
                 for x in self.msg['From'].split()
                 if self.msg['Return-Path'] not in x
@@ -131,62 +135,36 @@ class Gmailer(Debuggable):
             s=Peeler.core(self.con.fetch(msg_ID, msg_parts)),
             _class=EmailMessage)
 
-    @staticmethod
-    def parse_msg(msg: EmailMessage):
-        # msg.get_  # TODO
-        msgstr = msg.as_string().replace("\r", "")
-        despaced = msgstr.replace("\n", "")
-        start_ix = despaced.find('<html')
-        end_ix = despaced.rfind("</html>") + 7  # +len("</html>")
-
-    @staticmethod
-    def get_body_of(msg: EmailMessage) -> str:
-        """ https://stackoverflow.com/a/32840516
-
-        :param msg: EmailMessage to get body content of
-        :return: str, body content of msg
-        """
-        body = ""
-
-        # not multipart - i.e. plain text, no attachments, keeping fingers crossed
-        if not msg.is_multipart():
-            body = msg.get_payload(decode=True)
-
-        else:
-            walker = msg.walk()
-            part = next(walker, None)
-            while part and not body:  # for part in msg.walk():
-                part = next(walker, None)
-                ctype = part.get_content_type()
-                cdispo = str(part.get('Content-Disposition'))
-
-                # skip any text/plain (txt) attachments
-                if ctype == 'text/plain' and 'attachment' not in cdispo:
-
-                    body = part.get_payload(decode=True)
-        # Decode and return body content
-        if hasattr(body, "decode"):
-            body = body.decode("utf-8")
-        return body
-
-    def get_emails_from(self, address: str | None = None, key: str = "ALL",
-                        value: Any = None, folder: str = "Inbox",
-                        how_many: int = 1) -> List[EmailMessage]:
+    def get_emails_from(self, address: str | None = None,
+                        folder: str = "Inbox", how_many: int = 1,
+                        subject_part: str | None = None,
+                        search_keywords: Mapping = dict(), search_terms:
+                        Iterable[str] = list()) -> list[EmailMessage]:
         """ Get most recent {how_many} emails 
 
         :param folder: str, folder/box to get emails from, defaults to "Inbox"
-        :param key: str, _description_, defaults to "ALL"
-        :param value: Any, _description_, defaults to None
         :param how_many: int, number of email messages to get, defaults to 1
         :return: List[EmailMessage], _description_
         """
         self.con.select(folder)
-        if address and not value:
-            key = "FROM"
-            value = address
-        filters = (key, f'"{value}"') if value else (key, )
-        try:
-            email_IDs = Peeler.core(self.con.search(None, *filters)).split()
+
+        # Build search query
+        if address:
+            search_keywords["FROM"] = address
+        if subject_part:
+            search_keywords["HEADER SUBJECT"] = subject_part
+        filters = [f'({k} "{v}")' for k, v in search_keywords.items()]
+
+        for term in search_terms:
+            if not term.startswith("("):
+                term = "(" + term
+            if not term.endswith(")"):
+                term += ")"
+            filters.append(term.upper().strip())
+
+        try:  # Execute search query and parse results
+            email_IDs = Peeler.core(
+                self.con.search(None, *search_terms)).split()
             if how_many < len(email_IDs):
                 email_IDs = email_IDs[-how_many:]
             return [self.fetch(msg_ID) for msg_ID in reversed(email_IDs)]
@@ -283,7 +261,8 @@ class Jobmailer(Gmailer):
             self.updater = GoogleSheetUpdater(debugging=self.debugging)
         jobs = list()
         for unread_job_email in self.get_emails_from(
-            address=LINKEDIN_EMAIL, key="UNSEEN", how_many=how_many
+            address=LINKEDIN_EMAIL, search_terms=["UNSEEN"], how_many=how_many,
+            subject_part=LinkedInJob.MAIL_SUBJECT
         ):
             jobs.append(LinkedInJob.fromGmailMsg(unread_job_email))
             self.updater.add_job_row(jobs[-1])
