@@ -4,7 +4,7 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-03-14
+Updated: 2025-03-15
 """
 # Import standard libraries
 import datetime as dt

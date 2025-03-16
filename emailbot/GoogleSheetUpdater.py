@@ -4,7 +4,7 @@
 Class to update a Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-11
-Updated: 2025-03-14
+Updated: 2025-03-15
 """
 # Import standard libraries
 import datetime as dt
@@ -33,7 +33,6 @@ from bs4 import BeautifulSoup
 from gconanpy.debug import Debuggable
 from gconanpy.dissectors import Peeler, Xray
 from gconanpy.IO.local import save_to_json
-from gconanpy.maps import LazyDotDict
 from gconanpy.seq import as_HTTPS_URL
 
 # Import local constants
@@ -146,7 +145,8 @@ class LinkedInJobNameRegex(list[re.Pattern]):
 
     # Symbols delimiting sections of string: -,:;/@()
     BOUND = re.compile(r"\s*[-,:;@\(\)]+\s*")
-    FN_WORDS = r"(?:\s(?:of|or)\s)*"
+
+    FN_WORDS = r"(?:\s(?:of|or)\s)*"  # Words unneeded at string start/end
     SEP = r"(?:\W)*"  # Whitespace and special chars, if any
     SPECIAL = r"[^\s\w]*"  # Special characters only, if any, not whitespace
     SUFFIX = r"(?:[a-z]*)"  # Word ending/suffix: -ed, -s, etc.
@@ -158,6 +158,8 @@ class LinkedInJobNameRegex(list[re.Pattern]):
         r"Opening|Opportunity|Job|Position",  # The fact that it's a job
         r"(?:Contract)+[a-z\s]*"  # Job type: Contract[ to hire, etc]
     )
+
+    # Get the job title noun (that all other words in the title modify)
     TITLE = re.compile(r"((?:Dev|Eng|Analy|Scien|Consultant)(?:[a-z])*)")
 
     def __init__(self):
@@ -184,16 +186,16 @@ class LinkedInJob:
 
     def __init__(self, company: str, name: str, url: str,
                  src: str = "LinkedIn", contact: str = "N/A",
-                 date_applied: dt.date | None = None):
-        self.company = company
-        self.contact = contact
-        self.date = date_applied.isoformat() if date_applied else "=TODAY()"
-        self.name = name
-        self.src = src
-        self.url = url
+                 applied_on: dt.date | None = None):
+        self.company: str = company
+        self.contact: str = contact
+        self.date: str = applied_on.isoformat() if applied_on else "=TODAY()"
+        self.name: str = name
+        self.src: str = src
+        self.url: str = url
 
     @classmethod
-    def shorten_name(cls, entire_name: str, max_len: int = 30):
+    def shorten_name(cls, entire_name: str, max_len: int = 30) -> str:
         name = entire_name
         if len(name) > max_len:
             title_noun = None  # cls.REGX.TITLE.match(parts[-1])
@@ -308,14 +310,14 @@ class LinkedInJob:
         job_name = str.split(job_el.text, company, 1)[0].strip()
         return LinkedInJob(company=company, name=job_name,
                            url=job_URL.split('?', 1)[0],
-                           date_applied=job_app_date)
+                           applied_on=job_app_date)
 
 
 class GoogleSheetUpdater(Debuggable):
-    FORMULAS = {"status": ('=if(isdate(A2),if(today()-A2>30,'
-                           '"Stale","Active"),"Not Yet")')  # ,
-                # "link": '=HYPERLINK("{}","{}")'}
-                }
+    FORMULAS: dict[str:str] = {"status": ('=if(isdate(A2),if(today()-A2>30,'
+                                          '"Stale","Active"),"Not Yet")')  # ,
+                               # "link": '=HYPERLINK("{}","{}")'}
+                               }
 
     def __init__(self, worksheet_name: str = WORKSHEET_NAME,
                  sheetID: str = GOOGLE_SHEET_ID,
