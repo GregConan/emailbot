@@ -113,11 +113,12 @@ class Gmailer(Debuggable):
 
     # TODO Add functionality to restore connection on abort
 
-    def draft_reply_to(self, msg: EmailMessage, template_name: str) -> ReplyTo:
+    def draft_reply_to(self, msg: EmailMessage, template_name: str,
+                       save_to: str = '[Gmail]/Drafts') -> ReplyTo:
         reply = ReplyTo(msg, debugging=self.debugging,
                         template=self.templates[template_name],
                         my_address=self.address)
-        self.con.append(mailbox='[Gmail]/Drafts', flags="",
+        self.con.append(mailbox=save_to, flags="",
                         message=str(reply).encode("utf-8"),
                         date_time=imaplib.Time2Internaldate(
                             dt.datetime.now().astimezone()))
@@ -139,7 +140,8 @@ class Gmailer(Debuggable):
                         folder: str = "Inbox", how_many: int = 1,
                         subject_part: str | None = None,
                         search_keywords: Mapping = dict(), search_terms:
-                        Iterable[str] = list()) -> list[EmailMessage]:
+                        Iterable[str] = list()
+                        ) -> list[tuple[EmailMessage, str]]:
         """ Get most recent {how_many} emails 
 
         :param folder: str, folder/box to get emails from, defaults to "Inbox"
@@ -167,7 +169,8 @@ class Gmailer(Debuggable):
                 self.con.search(None, *search_terms)).split()
             if how_many < len(email_IDs):
                 email_IDs = email_IDs[-how_many:]
-            return [self.fetch(msg_ID) for msg_ID in reversed(email_IDs)]
+            return [(self.fetch(msg_ID), msg_ID)
+                    for msg_ID in reversed(email_IDs)]
         except (AttributeError, imaplib.IMAP4.error) as err:
             self.debug_or_raise(err, locals())
 
@@ -230,6 +233,20 @@ class Gmailer(Debuggable):
         except TypeError as err:
             self.debug_or_raise(err, locals())
 
+    def move_msg(self, msgID: str, move_from: str, move_to: str) -> None:
+        """
+        _summary_ 
+        :param move_from: str, _description_
+        :param move_to: str, _description_
+        """
+        self.con.select(move_from)
+        # self.con.uid("MOVE", msgID, move_to)
+        self.con.store(msgID, '+X-GM-LABELS', f'({move_to})')
+        # instead of "removing" original label it deletes the email from the label
+        # since labels act like folders in gmaile
+        self.con.store(msgID, '+FLAGS', '\\Deleted')
+        # self.con.copy(msgIDs, move_to)
+
     def search(self, key: str, value: Any) -> Any:
         """ Search the contents of a Gmail account to find a key-value pair.
 
@@ -256,13 +273,20 @@ class Jobmailer(Gmailer):
         # Class to update Google Sheet using details from emails
         self.updater = updater
 
-    def check_linkedin_emails(self, how_many: int = 1):
+    def put_away_msg(self, msgID: str):
+        try:
+            self.move_msg(msgID, "Inbox", "job-application-submissions")
+        except imaplib.IMAP4.error as err:
+            self.debug_or_raise(err, locals())
+
+    def check_linkedin_emails(self, how_many: int = 5):
         if not self.updater:
             self.updater = GoogleSheetUpdater(debugging=self.debugging)
         jobs = list()
-        for unread_job_email in self.get_emails_from(
+        for unread_job_email, msg_ID in self.get_emails_from(
             address=LINKEDIN_EMAIL, search_terms=["UNSEEN"], how_many=how_many,
             subject_part=LinkedInJob.MAIL_SUBJECT
         ):
             jobs.append(LinkedInJob.fromGmailMsg(unread_job_email))
             self.updater.add_job_row(jobs[-1])
+            self.put_away_msg(msg_ID)

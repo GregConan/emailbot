@@ -11,7 +11,8 @@ import datetime as dt
 from email.message import EmailMessage
 import os
 import pdb
-from typing import Any, Callable, Iterable, Mapping, Sequence
+import re
+from typing import Any, Callable, Generator, Iterable, Mapping, Sequence
 
 # Import third-party PyPI libraries
 from google.auth.transport.requests import Request
@@ -32,6 +33,7 @@ from bs4 import BeautifulSoup
 from gconanpy.debug import Debuggable
 from gconanpy.dissectors import Peeler, Xray
 from gconanpy.IO.local import save_to_json
+from gconanpy.maps import LazyDotDict
 from gconanpy.seq import as_HTTPS_URL
 
 # Import local constants
@@ -139,31 +141,114 @@ class GCPAuth(Debuggable):
         return [cls.SCOPE_URL + scope for scope in scope_names]
 
 
+class LinkedInJobNameRegex(list[re.Pattern]):
+    NONWORD = re.compile(r"(\W)+")  # Only whitespaces and special chars
+
+    # Symbols delimiting sections of string: -,:;/@()
+    BOUND = re.compile(r"\s*[-,:;@\(\)]+\s*")
+    FN_WORDS = r"(?:\s(?:of|or)\s)*"
+    SEP = r"(?:\W)*"  # Whitespace and special chars, if any
+    SPECIAL = r"[^\s\w]*"  # Special characters only, if any, not whitespace
+    SUFFIX = r"(?:[a-z]*)"  # Word ending/suffix: -ed, -s, etc.
+    TERMS = (
+        r"W2|Only|No|H1b",  # Visa status: "W2 Only No H1b", etc
+        r"(?:Immediate|Urgen|Requir|Need)" + SUFFIX + FN_WORDS,  # Urgency
+        r"100\%|Remote",  # Location: "100% Remote"
+        r"Only|(?:[a-z]{4}\sTime)",  # Job type: full/part time
+        r"Opening|Opportunity|Job|Position",  # The fact that it's a job
+        r"(?:Contract)+[a-z\s]*"  # Job type: Contract[ to hire, etc]
+    )
+    TITLE = re.compile(r"((?:Dev|Eng|Analy|Scien|Consultant)(?:[a-z])*)")
+
+    def __init__(self):
+        super().__init__(self.build_pattern(term) for term in self.TERMS)
+
+    @classmethod
+    def build_pattern(cls, term: str) -> re.Pattern:
+        return re.compile(f"{cls.SPECIAL}{cls.SEP}(?:{term})+", re.IGNORECASE)
+
+    @classmethod
+    def normalize(cls, a_str: str) -> str:
+        return cls.NONWORD.sub(repl=" ", string=a_str)
+
+
 class LinkedInJob:
-    URL_PREFIX = "https://www.linkedin.com/jobs/view/"
+    APP_DATE_PREFIX = "Applied on "
     FORMULAS = {"status": ('=if(isdate(A2),if(today()-A2>30,'
                            '"Stale","Active"),"Not Yet")')  # ,
                 # "link": '=HYPERLINK("{}","{}")'}
                 }
     MAIL_SUBJECT = "your application was sent to "
-    APP_DATE_PREFIX = "Applied on "
+    REGX = LinkedInJobNameRegex()
+    URL_PREFIX = "https://www.linkedin.com/jobs/view/"
 
-    def __init__(self, company: str, title: str, url: str,
+    def __init__(self, company: str, name: str, url: str,
                  src: str = "LinkedIn", contact: str = "N/A",
                  date_applied: dt.date | None = None):
         self.company = company
         self.contact = contact
         self.date = date_applied.isoformat() if date_applied else "=TODAY()"
-        self.title = title
+        self.name = name
         self.src = src
         self.url = url
+
+    @classmethod
+    def shorten_name(cls, entire_name: str, max_len: int = 30):
+        name = entire_name
+        if len(name) > max_len:
+            title_noun = None  # cls.REGX.TITLE.match(parts[-1])
+            title_found = None
+            parts = [x for x in cls.REGX.BOUND.split(name.strip())]
+            while len(parts) > 0 and (title_found is None) \
+                    and len(name) > max_len:
+                title_found = cls.REGX.TITLE.search(parts[-1])
+                if title_found is None:
+                    parts.pop()
+                else:
+                    title_noun = title_found.groups()[0]
+                shortened = " ".join(parts)
+                if len(shortened) > 0:
+                    name = shortened
+
+            if len(name) > max_len:
+                ix = 0
+                while ix < len(cls.REGX) and len(name) > max_len:
+                    shortened = cls.REGX[ix].sub(repl="", string=name)
+                    if len(shortened) > 3 and (not title_noun or
+                                               title_noun in shortened):
+                        name = shortened
+                    ix += 1
+
+            if len(name) > max_len:
+                # name = re.compile(cls.REGX.FN_WORDS)(" ", name)
+                if title_noun:
+                    words = name.split()
+                    try:
+                        title_noun_pos = words.index(title_noun)
+                    except ValueError as err:
+                        pdb.set_trace()
+                        print(err)
+                    while len(words) > title_noun_pos + 1 and len(name) > max_len:
+                        words.pop()
+                        name = " ".join(words)
+
+                    while len(words) > 1 and len(name) > max_len:
+                        words.pop(0)
+                        name = " ".join(words)
+
+                    name = cls.REGX.normalize(name).strip()
+
+                    if len(name) > max_len:
+                        name = name[:name.rfind(" ", max_len) + 1]
+
+        return name
 
     def toGoogleSheetsRow(self) -> list[str]:
         """
         :return: list[str] of values to insert into a Google Sheet row.
         """
         return [self.date, self.company,
-                f'=HYPERLINK("{self.url}","{self.title}")',
+                f'=HYPERLINK("{self.url}","{self.shorten_name(self.name)}")',
                 self.FORMULAS["status"], self.src, self.contact]
 
     @classmethod
@@ -221,7 +306,7 @@ class LinkedInJob:
 
         # Instantiate LinkedInJob using the details from the message
         job_name = str.split(job_el.text, company, 1)[0].strip()
-        return LinkedInJob(company=company, title=job_name,
+        return LinkedInJob(company=company, name=job_name,
                            url=job_URL.split('?', 1)[0],
                            date_applied=job_app_date)
 
