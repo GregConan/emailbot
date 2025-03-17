@@ -279,14 +279,20 @@ class Jobmailer(Gmailer):
         except imaplib.IMAP4.error as err:
             self.debug_or_raise(err, locals())
 
-    def check_linkedin_emails(self, how_many: int = 5):
+    def check_linkedin_emails(self, how_many: int = 10):
         if not self.updater:
             self.updater = GoogleSheetUpdater(debugging=self.debugging)
         jobs = list()
+        failed = dict()
         for unread_job_email, msg_ID in self.get_emails_from(
             address=LINKEDIN_EMAIL, search_terms=["UNSEEN"], how_many=how_many,
             subject_part=LinkedInJob.MAIL_SUBJECT
         ):
-            jobs.append(LinkedInJob.fromGmailMsg(unread_job_email))
+            try:
+                jobs.append(LinkedInJob.fromGmailMsg(unread_job_email))
+            except ValueError as err:
+                failed[msg_ID] = unread_job_email  # TODO
+                if self.debugging:
+                    self.debug_or_raise(err)
             self.updater.add_job_row(jobs[-1])
             self.put_away_msg(msg_ID)

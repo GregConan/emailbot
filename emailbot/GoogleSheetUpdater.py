@@ -4,7 +4,7 @@
 Class to update a Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-11
-Updated: 2025-03-15
+Updated: 2025-03-16
 """
 # Import standard libraries
 import datetime as dt
@@ -37,10 +37,12 @@ from gconanpy.seq import as_HTTPS_URL
 
 # Import local constants
 try:
+    from LinkedInJob import LinkedInJob
     from constants import (GOOGLE_CREDS_JSON, GOOGLE_SERVICE_JSON,
                            GOOGLE_SHEET_ID, GOOGLE_TOKEN_JSON,
                            WORKSHEET_NAME)
 except ModuleNotFoundError:
+    from emailbot.LinkedInJob import LinkedInJob
     from emailbot.constants import (GOOGLE_CREDS_JSON, GOOGLE_SERVICE_JSON,
                                     GOOGLE_SHEET_ID, GOOGLE_TOKEN_JSON,
                                     WORKSHEET_NAME)
@@ -138,179 +140,6 @@ class GCPAuth(Debuggable):
         :return: List[str] of scope URLs to include in the credentials
         """
         return [cls.SCOPE_URL + scope for scope in scope_names]
-
-
-class LinkedInJobNameRegex(list[re.Pattern]):
-    NONWORD = re.compile(r"(\W)+")  # Only whitespaces and special chars
-
-    # Symbols delimiting sections of string: -,:;/@()
-    BOUND = re.compile(r"\s*[-,:;@\(\)]+\s*")
-
-    FN_WORDS = r"(?:\s(?:of|or)\s)*"  # Words unneeded at string start/end
-    SEP = r"(?:\W)*"  # Whitespace and special chars, if any
-    SPECIAL = r"[^\s\w]*"  # Special characters only, if any, not whitespace
-    SUFFIX = r"(?:[a-z]*)"  # Word ending/suffix: -ed, -s, etc.
-    TERMS = (
-        r"W2|Only|No|H1b",  # Visa status: "W2 Only No H1b", etc
-        r"(?:Immediate|Urgen|Requir|Need)" + SUFFIX + FN_WORDS,  # Urgency
-        r"100\%|Remote",  # Location: "100% Remote"
-        r"Only|(?:[a-z]{4}\sTime)",  # Job type: full/part time
-        r"Opening|Opportunity|Job|Position",  # The fact that it's a job
-        r"(?:Contract)+[a-z\s]*"  # Job type: Contract[ to hire, etc]
-    )
-
-    # Get the job title noun (that all other words in the title modify)
-    TITLE = re.compile(r"((?:Dev|Eng|Analy|Scien|Consultant)(?:[a-z])*)")
-
-    def __init__(self):
-        super().__init__(self.build_pattern(term) for term in self.TERMS)
-
-    @classmethod
-    def build_pattern(cls, term: str) -> re.Pattern:
-        return re.compile(f"{cls.SPECIAL}{cls.SEP}(?:{term})+", re.IGNORECASE)
-
-    @classmethod
-    def normalize(cls, a_str: str) -> str:
-        return cls.NONWORD.sub(repl=" ", string=a_str)
-
-
-class LinkedInJob:
-    APP_DATE_PREFIX = "Applied on "
-    FORMULAS = {"status": ('=if(isdate(A2),if(today()-A2>30,'
-                           '"Stale","Active"),"Not Yet")')  # ,
-                # "link": '=HYPERLINK("{}","{}")'}
-                }
-    MAIL_SUBJECT = "your application was sent to "
-    REGX = LinkedInJobNameRegex()
-    URL_PREFIX = "https://www.linkedin.com/jobs/view/"
-
-    def __init__(self, company: str, name: str, url: str,
-                 src: str = "LinkedIn", contact: str = "N/A",
-                 applied_on: dt.date | None = None):
-        self.company: str = company
-        self.contact: str = contact
-        self.date: str = applied_on.isoformat() if applied_on else "=TODAY()"
-        self.name: str = name
-        self.src: str = src
-        self.url: str = url
-
-    @classmethod
-    def shorten_name(cls, entire_name: str, max_len: int = 30) -> str:
-        name = entire_name
-        if len(name) > max_len:
-            title_noun = None  # cls.REGX.TITLE.match(parts[-1])
-            title_found = None
-            parts = [x for x in cls.REGX.BOUND.split(name.strip())]
-            while len(parts) > 0 and (title_found is None) \
-                    and len(name) > max_len:
-                title_found = cls.REGX.TITLE.search(parts[-1])
-                if title_found is None:
-                    parts.pop()
-                else:
-                    title_noun = title_found.groups()[0]
-                shortened = " ".join(parts)
-                if len(shortened) > 0:
-                    name = shortened
-
-            if len(name) > max_len:
-                ix = 0
-                while ix < len(cls.REGX) and len(name) > max_len:
-                    shortened = cls.REGX[ix].sub(repl="", string=name)
-                    if len(shortened) > 3 and (not title_noun or
-                                               title_noun in shortened):
-                        name = shortened
-                    ix += 1
-
-            if len(name) > max_len:
-                # name = re.compile(cls.REGX.FN_WORDS)(" ", name)
-                if title_noun:
-                    words = name.split()
-                    try:
-                        title_noun_pos = words.index(title_noun)
-                    except ValueError as err:
-                        pdb.set_trace()
-                        print(err)
-                    while len(words) > title_noun_pos + 1 and len(name) > max_len:
-                        words.pop()
-                        name = " ".join(words)
-
-                    while len(words) > 1 and len(name) > max_len:
-                        words.pop(0)
-                        name = " ".join(words)
-
-                    name = cls.REGX.normalize(name).strip()
-
-                    if len(name) > max_len:
-                        name = name[:name.rfind(" ", max_len) + 1]
-
-        return name
-
-    def toGoogleSheetsRow(self) -> list[str]:
-        """
-        :return: list[str] of values to insert into a Google Sheet row.
-        """
-        return [self.date, self.company,
-                f'=HYPERLINK("{self.url}","{self.shorten_name(self.name)}")',
-                self.FORMULAS["status"], self.src, self.contact]
-
-    @classmethod
-    def fromGmailMsg(cls, msg: EmailMessage) -> "LinkedInJob":
-        """
-        :param msg: EmailMessage representing an automated email sent by \
-            LinkedIn after applying to a job on the website.
-        :return: LinkedInJob with the details of the job applied to.
-        """
-        # Get name of company that posted the job
-        company = msg["Subject"].split(cls.MAIL_SUBJECT)[-1]
-
-        # Convert EmailMessage to valid HTML body string
-        msgstr = msg.as_string().replace("\r", "")
-        despaced = msgstr.replace("=\n", "").replace("=3D", "=")
-        start_ix = despaced.find("<body")
-        end_ix = despaced.rfind("</body>") + 7  # +len("</body>")
-        bodystr = despaced[start_ix:end_ix]
-
-        # Convert HTML body string to BeautifulSoup to parse msg contents
-        body = BeautifulSoup(bodystr, features="html.parser")
-
-        # Filter out more useless whitespace from the message
-        for blank_str in body.find_all(string=' '):
-            blank_str.extract()  # Remove from BeautifulSoup XML element tree
-
-        # Get first job hyperlink in the message
-        job_el = None
-        ix = 0
-        all_links = body.find_all("a")
-        while not job_el and ix < len(all_links):
-            innerText = all_links[ix].get_text(strip=True)
-            job_URL = all_links[ix].attrs["href"]
-            if innerText and "/jobs/view/" in job_URL:
-                job_el = all_links[ix]
-            else:
-                ix += 1
-        if not job_el:
-            raise ValueError("Couldn't find job URL in message")
-
-        # Parse message to get the job application submission date
-        ix = 0
-        body_parts = Peeler.peel2(body)
-        job_app_date = None
-        while job_app_date is None and ix < len(body_parts):
-            txt_part = bs4.Tag.get_text(body_parts[ix], strip=True)
-            datesplit = str.split(txt_part, cls.APP_DATE_PREFIX)
-            if len(datesplit) > 1:
-                job_app_date = dt.datetime.strptime(
-                    datesplit[1], '%B %d, %Y').date()
-            else:
-                ix += 1
-        if not job_app_date:
-            raise ValueError("Couldn't find job application date in message")
-
-        # Instantiate LinkedInJob using the details from the message
-        job_name = str.split(job_el.text, company, 1)[0].strip()
-        return LinkedInJob(company=company, name=job_name,
-                           url=job_URL.split('?', 1)[0],
-                           applied_on=job_app_date)
 
 
 class GoogleSheetUpdater(Debuggable):
