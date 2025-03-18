@@ -5,19 +5,17 @@ Class to insert a row with LinkedIn job application details into a \
     Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-16
-Updated: 2025-03-16
+Updated: 2025-03-18
 """
 # Import standard libraries
-from abc import ABC
 import datetime as dt
 from email.message import EmailMessage
-import os
 import pdb
 import re
-from typing import Any, Callable, Iterable, Mapping, Sequence, TypeVar
+from typing import Any, Callable, Iterable, Mapping
 
+# Import third-party PyPI libraries
 import bs4
-from bs4 import BeautifulSoup
 
 # Import remote custom libraries
 from gconanpy.dissectors import Peeler, Whittler, Xray
@@ -75,8 +73,7 @@ class LinkedInJob:
                    JOB=(("Senior", "Sr"),))
     APP_DATE_PREFIX = "Applied on "
     FORMULAS = {"status": ('=if(isdate(A2),if(today()-A2>30,'
-                           '"Stale","Active"),"Not Yet")'),
-                "date": "=TODAY()"}
+                           '"Stale","Active"),"Not Yet")')}  # "date": "=TODAY()"}
     MAIL_SUBJECT = "your application was sent to "
     REGX = LinkedInJobNameRegex()
     UNNEEDED = (", Inc.", "Inc", "L.L.C", "LLC", "The")
@@ -162,7 +159,7 @@ class LinkedInJob:
         bodystr = despaced[start_ix:end_ix]
 
         # Convert HTML body string to BeautifulSoup to parse msg contents
-        body = BeautifulSoup(bodystr, features="html.parser")
+        body = bs4.BeautifulSoup(bodystr, features="html.parser")
 
         # Filter out more useless whitespace from the message
         for blank_str in body.find_all(string=' '):
@@ -196,7 +193,7 @@ class LinkedInJob:
                 ix += 1
         if job_app_date:
             if (job_app_date - dt.date.today()).days > 0:
-                job_app_date = cls.FORMULAS["date"]
+                job_app_date = dt.date.today()  # cls.FORMULAS["date"]
         else:
             raise ValueError("Couldn't find job application date in message")
 

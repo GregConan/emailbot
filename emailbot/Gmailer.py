@@ -4,7 +4,7 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-03-15
+Updated: 2025-03-17
 """
 # Import standard libraries
 import datetime as dt
@@ -17,24 +17,12 @@ import os
 import pdb
 import re
 from typing import Any, Callable, Iterable, Mapping
-import xml.etree.ElementTree as ETree
-
-# Import third-party PyPI libraries
-from bs4 import BeautifulSoup
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
 from gconanpy.dissectors import Peeler, Xray
 from gconanpy.IO.local import LoadedTemplate
 from gconanpy.seq import stringify
-
-# Import local custom libraries and constants
-try:
-    from constants import LINKEDIN_EMAIL
-    from GoogleSheetUpdater import GoogleSheetUpdater, LinkedInJob
-except ModuleNotFoundError:
-    from emailbot.constants import LINKEDIN_EMAIL
-    from emailbot.GoogleSheetUpdater import GoogleSheetUpdater, LinkedInJob
 
 
 # NOTE: Very much a work in progress.
@@ -233,19 +221,28 @@ class Gmailer(Debuggable):
         except TypeError as err:
             self.debug_or_raise(err, locals())
 
+    def mark_unread(self, msgIDs: Iterable[str]) -> None:
+        for msgID in msgIDs:
+            try:
+                self.con.store(msgID, "-FLAGS", "\\Seen")
+            except imaplib.IMAP4.error as err:
+                self.debug_or_raise(err, locals())
+
     def move_msg(self, msgID: str, move_from: str, move_to: str) -> None:
-        """
-        _summary_ 
+        """ Transfer message from one Gmail box to a different one(/label).
+        Instead of "removing" the original label, it deletes the email from \
+        the label, since labels act like folders in Gmail. Adapted from \
+        https://www.reddit.com/r/learnpython/comments/ckqrac/comment/evqjy5k
+
         :param move_from: str, _description_
         :param move_to: str, _description_
         """
-        self.con.select(move_from)
-        # self.con.uid("MOVE", msgID, move_to)
-        self.con.store(msgID, '+X-GM-LABELS', f'({move_to})')
-        # instead of "removing" original label it deletes the email from the label
-        # since labels act like folders in gmaile
-        self.con.store(msgID, '+FLAGS', '\\Deleted')
-        # self.con.copy(msgIDs, move_to)
+        try:
+            self.con.select(move_from)
+            self.con.store(msgID, "+X-GM-LABELS", f"({move_to})")
+            self.con.store(msgID, "+FLAGS", "\\Deleted")
+        except imaplib.IMAP4.error as err:
+            self.debug_or_raise(err, locals())
 
     def search(self, key: str, value: Any) -> Any:
         """ Search the contents of a Gmail account to find a key-value pair.
@@ -255,44 +252,3 @@ class Gmailer(Debuggable):
         :return: Any, _description_
         """
         return Peeler.core(self.con.search(None, key, f'"{value}"'))
-
-
-class Jobmailer(Gmailer):
-    MSG_FMT: str = "(RFC822)"
-
-    def __init__(self, imap_URL: str = "imap.gmail.com",
-                 # , address: str, password: str):
-                 updater: GoogleSheetUpdater | None = None,
-                 debugging: bool = False) -> None:
-        """
-        :param imap_URL: str, host URL to connect to using IMAP4 client. \
-                         Defaults to "imap.gmail.com"
-        """
-        super().__init__(imap_URL=imap_URL, debugging=debugging)
-
-        # Class to update Google Sheet using details from emails
-        self.updater = updater
-
-    def put_away_msg(self, msgID: str):
-        try:
-            self.move_msg(msgID, "Inbox", "job-application-submissions")
-        except imaplib.IMAP4.error as err:
-            self.debug_or_raise(err, locals())
-
-    def check_linkedin_emails(self, how_many: int = 10):
-        if not self.updater:
-            self.updater = GoogleSheetUpdater(debugging=self.debugging)
-        jobs = list()
-        failed = dict()
-        for unread_job_email, msg_ID in self.get_emails_from(
-            address=LINKEDIN_EMAIL, search_terms=["UNSEEN"], how_many=how_many,
-            subject_part=LinkedInJob.MAIL_SUBJECT
-        ):
-            try:
-                jobs.append(LinkedInJob.fromGmailMsg(unread_job_email))
-            except ValueError as err:
-                failed[msg_ID] = unread_job_email  # TODO
-                if self.debugging:
-                    self.debug_or_raise(err)
-            self.updater.add_job_row(jobs[-1])
-            self.put_away_msg(msg_ID)
