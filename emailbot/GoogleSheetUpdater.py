@@ -4,7 +4,7 @@
 Class to update a Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-11
-Updated: 2025-03-17
+Updated: 2025-03-26
 """
 # Import standard libraries
 import os
@@ -12,6 +12,7 @@ import pdb
 from typing import Any, Callable, Iterable, Mapping, TypeVar
 
 # Import third-party PyPI libraries
+# import dask.dataframe as dd
 from google.auth.transport.requests import Request
 # from google.auth.credentials import CredentialsWithQuotaProject
 from google.oauth2.service_account import Credentials as OauthServiceCreds
@@ -21,12 +22,14 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.errors import HttpError
 from google.auth.external_account_authorized_user import Credentials
 import gspread
+import pandas as pd  # TODO Switch to gspread_pandas or Dask?
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
-from gconanpy.dissectors import Peeler, Xray
+# from gconanpy.dissectors import Peeler, Xray
+# from gconanpy.finders import Whittler
 from gconanpy.IO.local import save_to_json
-from gconanpy.maps import Configtionary
+from gconanpy.maps import Configtionary, LazyDotDict
 from gconanpy.seq import stringify_list
 
 # Import local custom libraries
@@ -149,7 +152,8 @@ class GCPAuth(Debuggable):
         return [cls.SCOPE_URL + scope for scope in scope_names]
 
 
-class GoogleSheet(Debuggable):
+class GoogleSheet(LazyDotDict, Debuggable):
+    df: pd.DataFrame
 
     def __init__(self, sheet_ID: str, worksheet_name: str,
                  creds: GCPAuth.CREDS_TYPE,
@@ -170,15 +174,38 @@ class GoogleSheet(Debuggable):
             False to raise errors/exceptions; defaults to False.
         """
         try:
+            super().__init__()
             self.debugging = debugging
             self.client = gspread.authorize(creds)
-            self.spreadsheet = self.client.open_by_key(sheet_ID)
-            self.worksheet = self.spreadsheet.worksheet(worksheet_name)
+            self.online_sheets = self.client.open_by_key(sheet_ID)
+            self.online_sheet = self.online_sheets.worksheet(worksheet_name)
         except gspread.exceptions.GSpreadException as err:
             self.debug_or_raise(err, locals())
 
+    def get_df(self, *args, **kwargs) -> pd.DataFrame:
+        return self.lazysetdefault("df", self.to_df, args, kwargs,
+                                   exclude_empties=True)
+
+    def to_df(self, *args, **kwargs) -> pd.DataFrame:
+        try:
+            return pd.DataFrame(self.lazysetdefault(
+                "sheet", self.online_sheet.get_all_records, args, kwargs,
+                exclude_empties=True))
+        except (gspread.exceptions.GSpreadException, TypeError, ValueError
+                ) as err:
+            self.debug_or_raise(err, locals())
+
+    def __getitem__(self, key):
+        return self.get_df().__getitem__(key)
+
 
 class JobsAppsSheetUpdater(GoogleSheet):
+    COL_NAMES = {"Date Applied": "date",
+                 "Company": "company",
+                 "Position": "name",
+                 "App Status": "status",
+                 "Where": "src",
+                 "Contact(s)": "contact"}
 
     def __init__(self, sheet_ID: str, worksheet_name: str,
                  jobs_email: str | None = None, relabel: str | None = None,
@@ -202,6 +229,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
         """
 
         # (GOOGLE_SERVICE_JSON, GOOGLE_SHEET_ID, GOOGLE_TOKEN_JSON, WORKSHEET_NAME)
+        self.debugging = debugging
         self.jobs_email = jobs_email
         self.relabel = relabel
         try:
@@ -218,7 +246,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
     def from_config(cls, config: Configtionary, sep: str = ".",
                     default: Any | None = None, debugging: bool = False,
                     **config_vars: str):  # -> "GoogleSheetUpdater"
-        """ _summary_ 
+        """ _summary_
 
         :param config: Configtionary, _description_
         :param sep: str,_description_, defaults to "."
@@ -227,44 +255,102 @@ class JobsAppsSheetUpdater(GoogleSheet):
         :param config_vars: Mapping[str, str], _description_
         :return: _type_, _description_
         """
-        return cls(**config.from_lookups(config_vars, sep, default),
+        return cls(**config.get_subset_from_lookups(config_vars, sep, default),
                    debugging=debugging)
 
     def add_job_row(self, job: LinkedInJob, row_num: int = 2
-                    ) -> gspread.worksheet.JSONResponse:
-        """ _summary_ 
+                    ) -> gspread.worksheet.JSONResponse | None:
+        """ _summary_
 
         :param job: LinkedInJob, _description_
         :param row_num: int,_description_, defaults to 2
         :return: gspread.worksheet.JSONResponse, _description_
         """
-        return self.worksheet.insert_row(
-            job.toGoogleSheetsRow(), index=row_num,
-            value_input_option=gspread.utils.ValueInputOption.user_entered)
+        row_values = job.toGoogleSheetsRow()
+        return self.online_sheet.insert_row(
+            row_values, index=row_num,
+            value_input_option=gspread.utils.ValueInputOption.user_entered
+        ) if row_values else None
+
+    def to_df(self):
+        try:
+            return super().to_df(expected_headers=self.COL_NAMES.keys()
+                                 ).rename(self.COL_NAMES)
+        except (gspread.exceptions.GSpreadException, TypeError, ValueError
+                ) as err:
+            self.debug_or_raise(err, locals())
+
+    def update_status_of(self, job: LinkedInJob, new_status: str
+                         ) -> gspread.worksheet.JSONResponse:
+        i = 0
+        details = ("company", "name")
+        try:
+            target_rows = self.df
+            pdb.set_trace()
+            while len(target_rows) != 1 and i < len(details):  # TODO Abstract this structure?
+                detail = details[i]
+                col = LinkedInJob.COLS[detail]
+                # col = self["sheet"][detail]
+                self.df[self.df[detail]]  # TODO
+                versions = (job[detail], job[f"short_{detail}"])
+
+                j = 0
+                while len(target_rows) != 1 and j < len(versions):
+                    rows_with_detail = target_rows[target_rows[detail]
+                                                   == job[detail]]
+
+                    # self.df[self.df[detail]]
+
+                    # if self["sheet"][detail]  # TODO
+                    new_rows = set([cell.row for cell in self["sheet"].findall(
+                        query=job[versions[j]], in_column=col)])
+                    if new_rows:
+                        target_rows.intersection_update(new_rows)
+            return self.online_sheet.update_cell(
+                row=target_rows.pop(), col=LinkedInJob.COLS["status"], value=new_status)
+        except (AttributeError, KeyError, IndexError,
+                NameError, TypeError, ValueError) as err:
+            self.debug_or_raise(err, locals())
 
     def sort_job_apps_from_gmail(self, gmail: Gmailer, how_many: int = 10):
-        """ _summary_ 
+        """ _summary_
 
         :param gmail: Gmailer, _description_
         :param how_many: int,_description_, defaults to 10
         """
-        added = dict()
-        failed = dict()
+        done = dict()
+        ignored = dict()
         for unread_job_email, msg_ID in gmail.get_emails_from(
-            address=self.jobs_email, how_many=how_many,
-            subject_part=LinkedInJob.MAIL_SUBJECT, search_terms=["UNSEEN"]
+            address=self.jobs_email, how_many=how_many, search_terms=["UNSEEN"]
         ):
             try:
-                added[msg_ID] = LinkedInJob.fromGmailMsg(unread_job_email)
-                self.add_job_row(added[msg_ID])
-                if self.relabel:
-                    gmail.move_msg(msg_ID, "Inbox", self.relabel)
-            except ValueError:
-                failed[msg_ID] = unread_job_email["Subject"]
-        if failed:
-            gmail.mark_unread([failed_msg_ID for failed_msg_ID in failed])
+                job = LinkedInJob(unread_job_email, debugging=self.debugging)
+                job_app_was = job.get("verb", False)
+                match job_app_was:
+                    case "sent" | "applied":
+                        self.add_job_row(job)
+                        done[msg_ID] = job
+                        if self.relabel:
+                            gmail.move_msg(msg_ID, "Inbox", self.relabel)
+                    case "rejected" | "viewed":
+                        self.update_status_of(job, job_app_was.capitalize())
+                        done[msg_ID] = job
+                        if self.relabel:
+                            gmail.move_msg(msg_ID, "Inbox", self.relabel)
+                        # failed[msg_ID] = unread_job_email
+                    # if "Gregory, you have new application updates this week"  # TODO
+                    case _:
+                        # TODO
+                        ignored[msg_ID] = unread_job_email
+            except (AttributeError, IndexError, KeyError, TypeError,
+                    ValueError) as err:
+                ignored[msg_ID] = unread_job_email
+                self.debug_or_raise(err, locals())
+        if ignored:
+            gmail.mark_unread([ignored_msg_ID for ignored_msg_ID in ignored])
             if self.debugging:
-                faileds = stringify_list(list(failed.values()))
-                print(f"Failed to add jobs from these messages: {faileds}")
+                ignoreds = stringify_list([fail_msg["Subject"] for fail_msg
+                                           in ignored.values()])
+                print(f"Failed to add jobs from these messages: {ignoreds}")
                 pdb.set_trace()
                 print("done")

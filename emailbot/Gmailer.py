@@ -4,7 +4,7 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-03-17
+Updated: 2025-03-25
 """
 # Import standard libraries
 import datetime as dt
@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
-from gconanpy.dissectors import Peeler, Xray
+from gconanpy.dissectors import Corer, Xray
 from gconanpy.IO.local import LoadedTemplate
 from gconanpy.seq import stringify
 
@@ -120,15 +120,17 @@ class Gmailer(Debuggable):
         :param msg_parts: str defining which parts of an email to download.
         :return: EmailMessage retrieved via IMAP
         """
-        return email.message_from_bytes(
-            s=Peeler.core(self.con.fetch(msg_ID, msg_parts)),
-            _class=EmailMessage)
+        try:
+            fetched = Corer().core(self.con.fetch(msg_ID, msg_parts))
+            return email.message_from_bytes(s=fetched, _class=EmailMessage)
+        except (AttributeError, TypeError) as err:
+            self.debug_or_raise(err, locals())
 
     def get_emails_from(self, address: str | None = None,
                         folder: str = "Inbox", how_many: int = 1,
                         subject_part: str | None = None,
-                        search_keywords: Mapping = dict(), search_terms:
-                        Iterable[str] = list()
+                        search_keywords: Mapping[str, Any] = dict(),
+                        search_terms: Iterable[str] = list()
                         ) -> list[tuple[EmailMessage, str]]:
         """ Get most recent {how_many} emails 
 
@@ -143,18 +145,11 @@ class Gmailer(Debuggable):
             search_keywords["FROM"] = address
         if subject_part:
             search_keywords["HEADER SUBJECT"] = subject_part
-        filters = [f'({k} "{v}")' for k, v in search_keywords.items()]
 
-        for term in search_terms:
-            if not term.startswith("("):
-                term = "(" + term
-            if not term.endswith(")"):
-                term += ")"
-            filters.append(term.upper().strip())
+        filters = [f'{k} "{v}"' for k, v in search_keywords.items()]
 
         try:  # Execute search query and parse results
-            email_IDs = Peeler.core(
-                self.con.search(None, *search_terms)).split()
+            email_IDs = self.search(*filters).split()
             if how_many < len(email_IDs):
                 email_IDs = email_IDs[-how_many:]
             return [(self.fetch(msg_ID), msg_ID)
@@ -210,9 +205,9 @@ class Gmailer(Debuggable):
             while self.is_logged_out():
                 if err or not password:
                     PROMPT = "Incorrect email address or password. Failed " \
-                        f"to login to {address}:\n{stringify(err.args[0])}" + \
-                        PROMPT_FMT.format(
-                            "re") if err else PROMPT_FMT.format("")
+                        f"to login to {address}:\n{stringify(err.args[0])}" \
+                        + PROMPT_FMT.format("re") if err \
+                        else PROMPT_FMT.format("")
                     password = getpass(PROMPT)
                 if not password:
                     break
@@ -244,11 +239,9 @@ class Gmailer(Debuggable):
         except imaplib.IMAP4.error as err:
             self.debug_or_raise(err, locals())
 
-    def search(self, key: str, value: Any) -> Any:
-        """ Search the contents of a Gmail account to find a key-value pair.
+    def search(self, *filters: str) -> Any:
+        """ Search the contents of a Gmail account.
 
-        :param key: str, _description_
-        :param value: Any (stringifiable), _description_
         :return: Any, _description_
         """
-        return Peeler.core(self.con.search(None, key, f'"{value}"'))
+        return Corer().core(self.con.search(None, *filters))

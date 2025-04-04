@@ -4,7 +4,7 @@
 Gmail Bot
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-23
-Updated: 2025-03-18
+Updated: 2025-03-25
 """
 # Import standard libraries
 import argparse
@@ -58,7 +58,7 @@ def main():
                     jobs_email="Jobs:address", relabel="Jobs:relabel",
                     tokenJSON="Google.JSON:token",
                     serviceJSON="Google.JSON:service")
-                updater.sort_job_apps_from_gmail(gmail)
+                updater.sort_job_apps_from_gmail(gmail, cli_args.how_many)
 
         case "linkedin":
             options = FFOptions(  # "--safe-mode", "--allow-downgrade",
@@ -122,6 +122,12 @@ def get_cli_args(parser: argparse.ArgumentParser | None = None
     parser = add_new_out_dir_arg_to(parser, "out", dest="output",
                                     metavar="OUTPUT_DIRECTORY")
     parser.add_argument(
+        "-n", "--number", "--count", "--n-emails", "--how-many",
+        dest="how_many",
+        type=Valid.whole_number,
+        help=("Number of emails/jobs to fetch/check")
+    )
+    parser.add_argument(
         "-p", "-pass", "--password",
         dest="password",
         help=MSG_CRED.format("password")
@@ -143,10 +149,20 @@ def get_credentials(cli_args: DotDict[str, Any], config: Configtionary,
     """
     # Save credentials and settings into a custom encrypted dictionary
     try:
-        cli_args.setdefaults(**config.from_lookups(config_paths),
-                             keep_empties=False)
+        cli_args.setdefaults(**config.get_subset_from_lookups(config_paths),
+                             exclude_empties=True)
         creds = Cryptionary.from_subset_of(cli_args, "address", "debugging",
-                                           "password", keep_empties=False)
+                                           "password", exclude_empties=True)
+
+        # Prompt user for Gmail credentials if they didn't provide them as
+        # command-line arguments
+        PROMPT = "Please enter your %s: "
+        creds.setdefault_or_prompt_for("address", PROMPT % "email address",
+                                       exclude_empties=True)
+        creds.setdefault_or_prompt_for("password", PROMPT % "password",
+                                       getpass, exclude_empties=True)
+        return creds
+
     except KeyError as err:
         pdb.set_trace()
         if cli_args.debugging:
@@ -154,13 +170,6 @@ def get_credentials(cli_args: DotDict[str, Any], config: Configtionary,
             print()
         else:
             raise err
-
-    # Prompt user for Gmail credentials if they didn't provide them as
-    # command-line arguments
-    PROMPT = "Please enter your %s: "
-    creds.setdefault_or_prompt_for("address", PROMPT % "email address")
-    creds.setdefault_or_prompt_for("password", PROMPT % "password", getpass)
-    return creds
 
 
 if __name__ == "__main__":
