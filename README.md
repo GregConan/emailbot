@@ -10,7 +10,7 @@
 
 ### Example
 
-Below is `config.ini` file including all of the necessary variable definitions:
+Below is a `config.ini` file including all of the necessary variable definitions:
 
 ```
 [Firefox]
@@ -21,7 +21,7 @@ address = example@gmail.com
 new_label = gmail-section-label
 
 [Google.Worksheet]
-id = 1234567890-iPOk6a1senbuIM8w2XG2A-12345678901
+id = 1234567890-iPk6abuO1sIw2XM2Aen8G-12345678901
 name = Title of Worksheet in Google Sheet
 
 [Google.JSON]

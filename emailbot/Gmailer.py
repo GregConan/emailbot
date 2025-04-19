@@ -4,9 +4,10 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-03-25
+Updated: 2025-04-15
 """
 # Import standard libraries
+from collections.abc import Callable, Iterable, Mapping
 import datetime as dt
 import email
 from email.message import EmailMessage
@@ -16,7 +17,7 @@ import imaplib
 import os
 import pdb
 import re
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable

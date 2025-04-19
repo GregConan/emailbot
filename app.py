@@ -4,7 +4,7 @@
 Gmail Bot
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-23
-Updated: 2025-03-25
+Updated: 2025-04-15
 """
 # Import standard libraries
 import argparse
@@ -24,7 +24,7 @@ from gconanpy.maps import Cryptionary, DotDict
 
 # Import local custom libraries
 from emailbot.Gmailer import Gmailer
-from emailbot.GoogleSheetUpdater import JobsAppsSheetUpdater, Configtionary
+from emailbot.GoogleSheetUpdater import JobsAppsSheetUpdater
 from emailbot.LinkedInBot import FFOptions, LinkedInBot
 
 
@@ -33,7 +33,7 @@ def main():
 
     config = ConfigParser()
     config.read(cli_args.configs)
-    config = Configtionary.from_configparser(config)
+    config = DotDict.fromConfigParser(config)
 
     creds = get_credentials(cli_args, config, address="Gmail.address")
 
@@ -77,7 +77,7 @@ def get_cli_args(parser: argparse.ArgumentParser | None = None
                  ) -> DotDict[str, Any]:
     """
     :param parser: argparse.ArgumentParser to get command-line input arguments
-    :return: dict[str, Any], all arguments collected from the command line
+    :return: DotDict[str, Any], all arguments collected from the command line
     """
     DEFAULT_CONFIG = "config.ini"
     MSG_CRED = ("Your account {0}. If you don't include this argument, "
@@ -141,7 +141,7 @@ def get_cli_args(parser: argparse.ArgumentParser | None = None
     return DotDict(vars(parser.parse_args()))
 
 
-def get_credentials(cli_args: DotDict[str, Any], config: Configtionary,
+def get_credentials(cli_args: DotDict[str, Any], config: DotDict,
                     **config_paths: str) -> Cryptionary:
     """
     :param parser: argparse.ArgumentParser to get command-line input arguments

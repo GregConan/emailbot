@@ -5,14 +5,17 @@ Class to insert a row with LinkedIn job application details into a \
     Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-16
-Updated: 2025-04-03
+Updated: 2025-04-16
 """
 # Import standard libraries
+from collections import namedtuple
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 import datetime as dt
 from email.message import EmailMessage
 import pdb
 import re
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any
 
 # Import third-party PyPI libraries
 import bs4
@@ -20,10 +23,10 @@ import bs4
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
 from gconanpy.dissectors import Shredder, Xray
-from gconanpy.find import modifind, spliterate, whittle
-from gconanpy.IO.web import without_parameters
-from gconanpy.maps import LazyDict, DotDict
-from gconanpy.metafunc import nameof
+from gconanpy.find import modifind, ReadyChecker, spliterate
+from gconanpy.IO.web import URL
+from gconanpy.maps import DotDict, LazyDotDict
+from gconanpy.metafunc import DATA_ERRORS, nameof
 from gconanpy.seq import stringify_map
 
 
@@ -45,9 +48,9 @@ class LinkedInJobNameRegex(list[re.Pattern]):
 
         # Rejection message in email body
         REJECT=(r"(?:Thank you for your interest in the )(?P<name>.*)"
-                r"(?: position .*)(?:at|by)\s(?P<company>(?:(?!in)"
-                r"[A-Za-z\d\s])*)(?: [^\.]+)*(?:\. Unfortunately, we "
-                r"[\S]+ not .* your application)"),
+                r"(?: position .*)(?:at|by)\s(?P<company>(?:(?!in).)*)"
+                r"(?: [^\.]+)*(?: [^\.]+)*(?:\. Unfortunately, we "
+                r"[\S]+ not.*your application)"),
 
         # Email subject line
         SUBJECT=(r"(?:[Yy]ou(?:r application )?)(?:(?:was)?\s+"
@@ -73,7 +76,7 @@ class LinkedInJobNameRegex(list[re.Pattern]):
         r"(?:Contract)+[a-z\s]*"  # Job type: Contract[ to hire, etc]
     )
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(self.build_pattern(term) for term in self.TERMS)
 
     @classmethod
@@ -90,58 +93,85 @@ class LinkedInJobNameRegex(list[re.Pattern]):
         return parsed.groupdict(default=None) if parsed else dict()
 
 
-class LinkedInJob(LazyDict, Debuggable):
+# Job = namedtuple("Job", "date company name URL src contact")
+@dataclass
+class LinkedInJob(LazyDotDict, Debuggable):
+    # Input parameters without default values
+    date: dt.date
+    company: str
+    short_company: str
+    name: str
+    short_name: str
+    url: str
+
+    # Attributes and input parameters with default values
+    src: str = "LinkedIn"
+    contact: str = "N/A"
+    cols = dict(date=1, company=2, name=3, url=3, status=4, src=5, contact=6)
+    status = '=if(isdate(A2),if(today()-A2>30,"Stale","Active"),"Not Yet")'
+
+    def toGoogleSheetsRow(self) -> list[str]:
+        """
+        :return: list[str] of values to insert into a Google Sheet row: \
+            [date, company, name+url, status, src, contact]
+        """
+        try:
+            return [self.date, self.short_company,
+                    f'=HYPERLINK("{self.url}","{self.short_name}")',
+                    self.status, self.src, self.contact] if self else list()
+        except DATA_ERRORS as err:
+            self.debug_or_raise(err, locals())
+
+
+class LinkedInJobFromMsg(LinkedInJob):
     ABBR = DotDict(COMPANY=(("Technology", "Tech"),
                             ("Solution", "Soln")),
                    JOB=(("Senior", "Sr"), ("Junior", "Jr")))
     APP_DATE_PREFIX = "Applied on "
     APP_DATE_FORMATS = ("%B %d, %Y", "%b %d", "%b %d, %Y", "%B %d")
     MSG_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S %z (%Z)"
-    COLS = dict(date=1, company=2, name=3, URL=3, status=4, src=5, contact=6)
-    FORMULAS = {"status": ('=if(isdate(A2),if(today()-A2>30,'
-                           '"Stale","Active"),"Not Yet")')}  # "date": "=TODAY()"}
     REGX = LinkedInJobNameRegex()
     UNNEEDED = (", Inc.", "Inc", "L.L.C", "LLC", "The")
     URL_PREFIX = "https://www.linkedin.com/jobs/view/"
 
     def __init__(self, msg: EmailMessage, debugging: bool = False) -> None:
-        super().__init__()
+        LazyDotDict.__init__(self)
         errs = (AttributeError, TypeError, ValueError)
         self.debugging = debugging
         self.update(self.REGX.email_parse(msg["Subject"], "SUBJECT"))
         try:
-            self["msg_date"] = dt.datetime.strptime(
-                msg["Date"], self.MSG_DATE_FORMAT)
+            self.msg_date = dt.datetime.strptime(msg["Date"],
+                                                 self.MSG_DATE_FORMAT)
         except (TypeError, ValueError) as err:
             self.debug_or_raise(err, locals())
         if "company" in self:
-            self["body"] = self.get_body_of(msg)
-            self["shredded"] = Shredder(debugging=self.debugging
-                                        ).shred(self["body"])
-            self["date"] = self.get_date_from_body()
+            self.body = self.get_body_of(msg)
+            self.shredded = Shredder(debugging=self.debugging
+                                     ).shred(self.body)
+            self.date = self.get_date_from_body()
 
-            if self.get("verb", None) is None:
-                # If body text says "Unfortunately", make verb "rejected"
-                rejection_msg = modifind(
-                    find_in=self["shredded"], modify=self.REGX.email_parse,
-                    modify_args=["REJECT"],  found_if=bool
-                )
-                if rejection_msg:
-                    self["verb"] = "rejected"
-                    for detail in ("name", "company"):
-                        self.lazysetdefault(detail, rejection_msg.get, detail,
-                                            exclude_empties=True)
-                else:
-                    pdb.set_trace()
+            iterlinks = iter(self.body.find_all("a"))
+            link_el = next(iterlinks, None)
+            while None in {self.get("verb", None), self.get("url", None)
+                           } and link_el is not None:
+                try:
+                    # link_txt = link_el.get_text(strip=True)
+                    # if link_txt:
+                    link = link_el.attrs.get("href", None)
+                    if link:
+                        if "/jobs/view/" in link:
+                            self.url = URL(link).without_params()
+                        if "rejected" in link:
+                            self.verb = "rejected"
+                        elif "viewed" in link:
+                            self.verb = "viewed"
+                except AttributeError:
+                    pass
 
-            # Get job name and URL from first job hyperlink in the message
-            link_el = modifind(find_in=self["body"].find_all("a"),
-                               found_if=self.has_job_URL)
-            self["URL"] = without_parameters(link_el.attrs["href"])
-            self.lazysetdefault("name", self.get_name_from, [link_el],
-                                exclude_empties=True)
-            self["src"] = "LinkedIn"  # TODO parameterize?
-            self["contact"] = "N/A"  # TODO parameterize?
+                link_el = next(iterlinks, None)
+
+            if not self.get("name", None):
+                self.name = self.get_name_from(link_el)
 
             try:
                 for detail in ("name", "company"):
@@ -151,10 +181,7 @@ class LinkedInJob(LazyDict, Debuggable):
             except (AttributeError, TypeError, ValueError) as err:
                 self.debug_or_raise(err, locals())
 
-            # TODO Only iterate over the body/flattened once?
-
-    def __repr__(self):
-        return f"{nameof(self)}({stringify_map(self, max_len=100)})"
+            # TODO Only iterate over the body/shredded once?
 
     @staticmethod
     def get_body_of(msg: EmailMessage) -> bs4.BeautifulSoup:
@@ -183,7 +210,7 @@ class LinkedInJob(LazyDict, Debuggable):
         # body: bs4.BeautifulSoup): # flattened: list):
         # self.lazysetdefault("flattened", Peeler.peel, [body])
         # self.flattened = Peeler.peel(self.body)
-        job_app_date = modifind(find_in=self["shredded"],
+        job_app_date = modifind(find_in=self.shredded,
                                 modify=self.get_date_from_el)
         if job_app_date:
 
@@ -201,7 +228,7 @@ class LinkedInJob(LazyDict, Debuggable):
     def get_date_from_el(cls, date_el: Any) -> dt.date | None:
         try:
             txt_part = bs4.Tag.get_text(date_el, strip=True)
-        except AttributeError:
+        except AttributeError:  # , TypeError): # ?
             txt_part = str(date_el)
         try:
             datesplit = str.split(txt_part, cls.APP_DATE_PREFIX)
@@ -215,7 +242,7 @@ class LinkedInJob(LazyDict, Debuggable):
 
     def get_name_from(self, job_link_el: bs4.PageElement) -> str:
         # Instantiate LinkedInJob using the details from the message
-        return str.split(job_link_el.text, self["company"], 1)[0].strip()
+        return str.split(job_link_el.text, self.company, 1)[0].strip()
 
     @staticmethod
     def has_job_URL(link_el: bs4.Tag):
@@ -233,15 +260,14 @@ class LinkedInJob(LazyDict, Debuggable):
         is_short_enough = cls.make_name_len_checker(max_len)
         name = entire_name
         if not is_short_enough(name):
-            # TODO whittle(to_whittle= --> whittle(find_in=
-            name = whittle(to_whittle=name.strip(),
-                           iter_over=cls.UNNEEDED, whittler=str.replace,
-                           ready_if=is_short_enough, whittle_args=[" "])
-            # TODO whittle(to_whittle= --> whittle(find_in=
-            name = whittle(to_whittle=name, iter_over=cls.ABBR.COMPANY,
-                           whittler=lambda x, pair: str.replace(x, *pair
-                                                                ).strip(),
-                           ready_if=is_short_enough)
+            with ReadyChecker(to_check=name.strip(), iter_over=cls.UNNEEDED,
+                              ready_if=is_short_enough) as check:
+                while check.is_not_ready():
+                    check(str.replace(check.to_check, next(check), " "
+                                      ).strip())
+            name = cls.check_name(to_check=check.to_check.strip(),
+                                  iter_over=cls.ABBR.COMPANY,
+                                  ready_if=is_short_enough)
             name, _ = spliterate(parts=name.split(), ready_if=is_short_enough)
         # TODO seq.truncate
         return name if is_short_enough(name) else name[:max_len]
@@ -256,19 +282,18 @@ class LinkedInJob(LazyDict, Debuggable):
                 parts=parts, ready_if=is_short_enough, pop_ix=0,
                 get_target=cls.REGX.TITLE.search)
             title_noun = title_found.groups()[0] if title_found else None
-            # TODO whittle(to_whittle= --> whittle(find_in=
-            name = whittle(to_whittle=name, iter_over=cls.REGX,
-                           whittler=lambda x, regx: regx.sub("", x),
-                           ready_if=is_short_enough,
-                           viable_if=lambda y: y and (not title_noun or
-                                                      title_noun in y))
+            item = None
+            with ReadyChecker(to_check=name, iter_over=cls.REGX,
+                              ready_if=is_short_enough) as check:
+                while check.is_not_ready():
+                    prev = item
+                    item = next(check).sub("", check.to_check)
+                    check(item if item and (not title_noun or title_noun in
+                                            item) else prev)
 
             for shortenings in cls.ABBR.values():
-                # TODO whittle(to_whittle= --> whittle(find_in=
-                name = whittle(to_whittle=name, iter_over=shortenings,
-                               whittler=lambda x, pair: str.replace(x, *pair
-                                                                    ).strip(),
-                               ready_if=is_short_enough)
+                name = cls.check_name(to_check=name, iter_over=shortenings,
+                                      ready_if=is_short_enough)
 
             words = name.split()
             title_noun_pos = words.index(title_noun) + 1 if title_noun else 1
@@ -276,24 +301,16 @@ class LinkedInJob(LazyDict, Debuggable):
                                  min_len=title_noun_pos)
             name, _ = spliterate(parts=name.split(), ready_if=is_short_enough,
                                  pop_ix=0)
-            name = cls.REGX.normalize(name).strip().removesuffix("s")
+            name = cls.REGX.normalize(name).strip()
+            name = name.removesuffix("s").removesuffix(".")
         return name if is_short_enough(name) else \
             name[:name.rfind(" ", len(name) - max_len) + 1]
 
-    @classmethod
-    def which_sheet_col_has(cls, key: str) -> int:
-        return cls.COLS[key]
-
-    def toGoogleSheetsRow(self) -> list[str]:
-        """
-        :return: list[str] of values to insert into a Google Sheet row: \
-            [date, company, name+URL, status, src, contact]
-        """
-        try:
-            return [self["date"], self["short_company"],
-                    f'=HYPERLINK("{self["URL"]}","{self["short_name"]}")',
-                    self.FORMULAS["status"], self["src"], self["contact"]
-                    ] if self else list()
-        except (AttributeError, IndexError, KeyError, ValueError, TypeError
-                ) as err:
-            self.debug_or_raise(err, locals())
+    @staticmethod
+    def check_name(to_check: str, iter_over: Iterable[tuple[str, str]],
+                   ready_if: Callable[[str], bool]) -> str:
+        with ReadyChecker(to_check, iter_over, ready_if) as check:
+            while check.is_not_ready():
+                pair = next(check)
+                check(str.replace(check.to_check, *pair).strip())
+        return check.to_check
