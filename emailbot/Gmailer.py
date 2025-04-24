@@ -131,8 +131,9 @@ class Gmailer(Debuggable):
                         folder: str = "Inbox", how_many: int = 1,
                         subject_part: str | None = None,
                         search_keywords: Mapping[str, Any] = dict(),
-                        search_terms: Iterable[str] = list()
-                        ) -> list[tuple[EmailMessage, str]]:
+                        unread_only: bool = False
+                        # search_terms: Iterable[str] = list()
+                        ) -> list[tuple[EmailMessage, bytes]]:
         """ Get most recent {how_many} emails 
 
         :param folder: str, folder/box to get emails from, defaults to "Inbox"
@@ -146,15 +147,25 @@ class Gmailer(Debuggable):
             search_keywords["FROM"] = address
         if subject_part:
             search_keywords["HEADER SUBJECT"] = subject_part
-
         filters = [f'{k} "{v}"' for k, v in search_keywords.items()]
+        if unread_only:
+            filters.append("UNSEEN")
 
-        try:  # Execute search query and parse results
-            email_IDs = self.search(*filters).split()
-            if how_many < len(email_IDs):
-                email_IDs = email_IDs[-how_many:]
-            return [(self.fetch(msg_ID), msg_ID)
-                    for msg_ID in reversed(email_IDs)]
+        try:  # Execute search query
+            searched = self.search(*filters)
+
+            # If search came up empty, return an empty list
+            if searched == "OK":
+                result = list()
+            else:
+
+                # Otherwise, fetch and return the searched-for messages
+                email_IDs = searched.split()
+                if how_many < len(email_IDs):
+                    email_IDs = email_IDs[-how_many:]
+                result = [(self.fetch(msg_ID), msg_ID)
+                          for msg_ID in reversed(email_IDs)]
+            return result
         except (AttributeError, imaplib.IMAP4.error) as err:
             self.debug_or_raise(err, locals())
 
@@ -240,9 +251,10 @@ class Gmailer(Debuggable):
         except imaplib.IMAP4.error as err:
             self.debug_or_raise(err, locals())
 
-    def search(self, *filters: str) -> Any:
+    def search(self, *filters: str) -> bytes | str:
         """ Search the contents of a Gmail account.
 
         :return: Any, _description_
         """
-        return Corer().core(self.con.search(None, *filters))
+        return Corer(debugging=self.debugging
+                     ).core(self.con.search(None, *filters))

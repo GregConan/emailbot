@@ -5,12 +5,11 @@ Class to insert a row with LinkedIn job application details into a \
     Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-16
-Updated: 2025-04-16
+Updated: 2025-04-23
 """
 # Import standard libraries
-from collections import namedtuple
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+# from collections import namedtuple
+from collections.abc import Callable, Container, Iterable
 import datetime as dt
 from email.message import EmailMessage
 import pdb
@@ -19,15 +18,24 @@ from typing import Any
 
 # Import third-party PyPI libraries
 import bs4
+from pandas import DataFrame
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
-from gconanpy.dissectors import Shredder, Xray
+from gconanpy.dissectors import Shredder  # , Xray
+from gconanpy.extend import weak_dataclass
 from gconanpy.find import modifind, ReadyChecker, spliterate
 from gconanpy.IO.web import URL
-from gconanpy.maps import DotDict, LazyDotDict
-from gconanpy.metafunc import DATA_ERRORS, nameof
-from gconanpy.seq import stringify_map
+from gconanpy.maps import Defaultionary, DotDict, LazyDotDict
+from gconanpy.metafunc import DATA_ERRORS
+
+
+# TODO MOVE TO gconanpy ?
+def regex_parse(pattern: re.Pattern, txt: str, default: Any = None,
+                exclude: Container = set()) -> dict[str, str | None]:
+    parsed = pattern.search(txt)
+    parsed = parsed.groupdict(default=default) if parsed else dict()
+    return Defaultionary.from_subset_of(parsed, *parsed, exclude=exclude)
 
 
 class LinkedInJobNameRegex(list[re.Pattern]):
@@ -43,20 +51,15 @@ class LinkedInJobNameRegex(list[re.Pattern]):
     # Symbols delimiting sections of string: -,:;/@()
     BOUND = re.compile(r"\s*[-,:;@\(\)]+\s*")
 
-    # LinkedIn automated (noreply) job app email strings:
-    EMAIL = {k: re.compile(v) for k, v in dict.items(dict(
+    # LinkedIn automated (noreply) job app email subject line
+    EMAIL_SUBJECT = re.compile(r"(?:[Yy]ou(?:r application )?)(?:(?:was)?\s+"
+                               r"(?P<verb>[\S]*)\s+)*(?:to|by|for)+\s*(?:"
+                               r"(?P<name>.*?)\s+(?:at)\s+)*(?P<company>.*)")
 
-        # Rejection message in email body
-        REJECT=(r"(?:Thank you for your interest in the )(?P<name>.*)"
-                r"(?: position .*)(?:at|by)\s(?P<company>(?:(?!in).)*)"
-                r"(?: [^\.]+)*(?: [^\.]+)*(?:\. Unfortunately, we "
-                r"[\S]+ not.*your application)"),
-
-        # Email subject line
-        SUBJECT=(r"(?:[Yy]ou(?:r application )?)(?:(?:was)?\s+"
-                 r"(?P<verb>[\S]*)\s+)*(?:to|by|for)+\s*(?:"
-                 r"(?P<name>.*?)\s+(?:at)\s+)*(?P<company>.*)")
-    ))}
+    # Phrase in email saying when the job application was submitted
+    EMAIL_APP_DATE = re.compile(r"(?:Applied)(?:\:\s*(?P<delta>[\d\.]+)\s*"
+                                r"(?P<unit>\S+)\s*ago)*(?:\s*on\s*"
+                                r"(?P<date>.*))*")
 
     # Job title noun that all other words in the title modify
     TITLES = _OR(("Dev", "Eng", "Analy", "Scientist", "Consultant",
@@ -87,15 +90,10 @@ class LinkedInJobNameRegex(list[re.Pattern]):
     def normalize(cls, a_str: str) -> str:
         return cls.END.sub("", cls.START.sub("", cls.SLASH.sub("/", a_str)))
 
-    @classmethod
-    def email_parse(cls, to_search: str, to_find: str) -> dict[str, str | None]:
-        parsed = cls.EMAIL[to_find.upper()].search(to_search)
-        return parsed.groupdict(default=None) if parsed else dict()
-
 
 # Job = namedtuple("Job", "date company name URL src contact")
-@dataclass
-class LinkedInJob(LazyDotDict, Debuggable):
+@weak_dataclass
+class LinkedInJob(Debuggable):
     # Input parameters without default values
     date: dt.date
     company: str
@@ -108,7 +106,18 @@ class LinkedInJob(LazyDotDict, Debuggable):
     src: str = "LinkedIn"
     contact: str = "N/A"
     cols = dict(date=1, company=2, name=3, url=3, status=4, src=5, contact=6)
+
+    # TODO CHANGE isdate(A{}) CELL TO ACCOUNT FOR ADDING/UPDATING MULTIPLE ROWS
     status = '=if(isdate(A2),if(today()-A2>30,"Stale","Active"),"Not Yet")'
+
+    def filter_df_by_detail(self, df: DataFrame, detail: str) -> DataFrame:
+        shortname = f"short_{detail}"
+        details = {self[detail]}
+        if shortname in self:
+            details.add(self[shortname])
+
+        new_df = df.loc[df[detail].isin(details)]
+        return new_df if len(new_df.index) > 0 else df
 
     def toGoogleSheetsRow(self) -> list[str]:
         """
@@ -123,7 +132,7 @@ class LinkedInJob(LazyDotDict, Debuggable):
             self.debug_or_raise(err, locals())
 
 
-class LinkedInJobFromMsg(LinkedInJob):
+class LinkedInJobFromMsg(LinkedInJob, LazyDotDict, Debuggable):
     ABBR = DotDict(COMPANY=(("Technology", "Tech"),
                             ("Solution", "Soln")),
                    JOB=(("Senior", "Sr"), ("Junior", "Jr")))
@@ -135,16 +144,20 @@ class LinkedInJobFromMsg(LinkedInJob):
     URL_PREFIX = "https://www.linkedin.com/jobs/view/"
 
     def __init__(self, msg: EmailMessage, debugging: bool = False) -> None:
+        # Instantiate LinkedInJob using the details from the message
         LazyDotDict.__init__(self)
-        errs = (AttributeError, TypeError, ValueError)
         self.debugging = debugging
-        self.update(self.REGX.email_parse(msg["Subject"], "SUBJECT"))
+        self.update(regex_parse(self.REGX.EMAIL_SUBJECT,
+                                msg["Subject"].replace("\r", "")))
         try:
             self.msg_date = dt.datetime.strptime(msg["Date"],
                                                  self.MSG_DATE_FORMAT)
         except (TypeError, ValueError) as err:
             self.debug_or_raise(err, locals())
-        if "company" in self:
+        if "company" not in self:
+            pdb.set_trace()
+            print()
+        else:
             self.body = self.get_body_of(msg)
             self.shredded = Shredder(debugging=self.debugging
                                      ).shred(self.body)
@@ -155,8 +168,6 @@ class LinkedInJobFromMsg(LinkedInJob):
             while None in {self.get("verb", None), self.get("url", None)
                            } and link_el is not None:
                 try:
-                    # link_txt = link_el.get_text(strip=True)
-                    # if link_txt:
                     link = link_el.attrs.get("href", None)
                     if link:
                         if "/jobs/view/" in link:
@@ -171,7 +182,8 @@ class LinkedInJobFromMsg(LinkedInJob):
                 link_el = next(iterlinks, None)
 
             if not self.get("name", None):
-                self.name = self.get_name_from(link_el)
+                self.name = str.split(link_el.text, self.company, 1
+                                      )[0].strip()
 
             try:
                 for detail in ("name", "company"):
@@ -197,7 +209,7 @@ class LinkedInJobFromMsg(LinkedInJob):
         body = bs4.BeautifulSoup(bodystr, features="html.parser")
 
         # Filter out more useless whitespace from the message
-        for blank_str in body.find_all(string=' '):
+        for blank_str in body.find_all(string=" "):
             blank_str.extract()  # Remove from BeautifulSoup XML element tree
 
         return body
@@ -207,9 +219,6 @@ class LinkedInJobFromMsg(LinkedInJob):
 
         :return: str | None, _description_
         """
-        # body: bs4.BeautifulSoup): # flattened: list):
-        # self.lazysetdefault("flattened", Peeler.peel, [body])
-        # self.flattened = Peeler.peel(self.body)
         job_app_date = modifind(find_in=self.shredded,
                                 modify=self.get_date_from_el)
         if job_app_date:
@@ -220,34 +229,31 @@ class LinkedInJobFromMsg(LinkedInJob):
                 job_app_date = job_app_date.replace(
                     year=self.get("msg_date", today).year)
             if (job_app_date - today).days > 0:  # No job apps dated in future
-                job_app_date = today  # cls.FORMULAS["date"]
+                job_app_date = today
             job_app_date = job_app_date.isoformat()  # to string: YYYY-MM-DD
         return job_app_date
 
-    @classmethod
-    def get_date_from_el(cls, date_el: Any) -> dt.date | None:
+    def get_date_from_el(self, date_el: Any) -> dt.date | None:
         try:
             txt_part = bs4.Tag.get_text(date_el, strip=True)
         except AttributeError:  # , TypeError): # ?
             txt_part = str(date_el)
+
         try:
-            datesplit = str.split(txt_part, cls.APP_DATE_PREFIX)
-            return None if len(datesplit) < 2 else modifind(
-                find_in=cls.APP_DATE_FORMATS,
-                modify=lambda x: dt.datetime.strptime(datesplit[1], x).date()
-            )
-        except (TypeError, ValueError) as err:
-            pdb.set_trace()
-            print()
-
-    def get_name_from(self, job_link_el: bs4.PageElement) -> str:
-        # Instantiate LinkedInJob using the details from the message
-        return str.split(job_link_el.text, self.company, 1)[0].strip()
-
-    @staticmethod
-    def has_job_URL(link_el: bs4.Tag):
-        return link_el.get_text(strip=True) and \
-            "/jobs/view/" in link_el.attrs["href"]
+            parsed = regex_parse(self.REGX.EMAIL_APP_DATE, txt_part)
+            if "date" in parsed:  # parsed.get("date", None) is None:
+                app_date = modifind(
+                    self.APP_DATE_FORMATS,
+                    lambda x: dt.datetime.strptime(parsed["date"], x).date())
+            elif "delta" in parsed and "unit" in parsed:
+                timedeltattrs = {parsed["delta"]: parsed["unit"]}
+                time_since_app = dt.timedelta(**timedeltattrs)
+                app_date = (self.msg_date - time_since_app).date()
+            else:
+                app_date = None
+            return app_date
+        except DATA_ERRORS as err:
+            self.debug_or_raise(err)
 
     @staticmethod
     def make_name_len_checker(max_len: int) -> Callable[[str], bool]:

@@ -4,12 +4,12 @@
 Class to update a Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-11
-Updated: 2025-04-18
+Updated: 2025-04-23
 """
 # Import standard libraries
-from collections import namedtuple
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable
 import datetime as dt
+from email.message import EmailMessage
 import os
 import pdb
 from typing import Any, TypeVar
@@ -17,7 +17,6 @@ from typing import Any, TypeVar
 # Import third-party PyPI libraries
 # import dask.dataframe as dd
 from google.auth.transport.requests import Request
-# from google.auth.credentials import CredentialsWithQuotaProject
 from google.oauth2.service_account import Credentials as OauthServiceCreds
 from google.oauth2.credentials import Credentials as OauthCreds
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -32,6 +31,7 @@ from gconanpy.debug import Debuggable
 from gconanpy.find import ReadyChecker
 from gconanpy.IO.local import save_to_json
 from gconanpy.maps import DotDict, LazyDotDict
+from gconanpy.metafunc import DATA_ERRORS
 from gconanpy.seq import stringify_list
 
 # Import local custom libraries
@@ -205,7 +205,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
                  "App Status": "status",
                  "Where": "src",
                  "Contact(s)": "contact"}
-    CellUpdate = dict[str, str | list[list]]
+    IGNORABLE = "you have new application updates this week"
 
     def __init__(self, sheet_ID: str, worksheet_name: str,
                  jobs_email: str | None = None, relabel: str | None = None,
@@ -271,38 +271,30 @@ class JobsAppsSheetUpdater(GoogleSheet):
                 ) as err:
             self.debug_or_raise(err, locals())
 
-    def find_row_of(self, job: LinkedInJob) -> int:
-        df = self.get_df()
-        cmp_df = df.loc[df["company"].isin({job.company, job.short_company})]
-        if len(cmp_df.index) > 0:
-            df = cmp_df
+    def find_row_of_job(self, job: LinkedInJob) -> int:
+        with ReadyChecker(self.get_df(), ("company", "name", "date"),
+                          lambda a_df: len(a_df.index) == 1) as check:
+            while check.is_not_ready():
+                check.to_check = job.filter_df_by_detail(
+                    check.to_check, next(check))
+            df = check.to_check
+
         if len(df.index) > 1:
-            name_df = df.loc[df["name"].isin({job.name, job.short_name})]
-            if len(name_df.index) > 0:
-                df = name_df
-            if len(df.index) > 1:
-                dt_df = df.loc[df["date"] == job["date"]]
-                match len(dt_df.index):
-                    case 0:
-                        dates: pd.Series = self.lazysetdefault(
-                            "date_col", pd.to_datetime, [self.df["date"]],
-                            dict(yearfirst=True)).loc[df.index]
-                        job_dt = dt.datetime.fromisoformat(job.date)
-                        diffs = (dates - job_dt).abs()
-                        df = df.loc[diffs.loc[diffs == diffs.min()].index]
-                    case 1:
-                        df = dt_df
-                    case _:
-                        pdb.set_trace()
+            dates: pd.Series = self.lazysetdefault(
+                "date_col", pd.to_datetime, [self.df["date"]],
+                dict(yearfirst=True)).loc[df.index]
+            job_dt = dt.datetime.fromisoformat(job.date)
+            diffs = (dates - job_dt).abs()
+            df = df.loc[diffs.loc[diffs == diffs.min()].index]
 
         if len(df.index) != 1:
-            pdb.set_trace()
+            self.debug_or_raise(ValueError("Job not found in df"), locals())
 
         return df.index.item()
 
     def update_status_of(self, job: LinkedInJobFromMsg, new_status: str
                          ) -> gspread.worksheet.JSONResponse:
-        job_row = self.find_row_of(job)
+        job_row = self.find_row_of_job(job)
         if self.df.loc[job_row, "status"] != "Rejected":
             self.df.loc[job_row, "status"] = new_status  # TODO Unneeded?
             cell_to_update = gspread.utils.rowcol_to_a1(job_row + 2,
@@ -314,7 +306,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
                      ) -> dict[str, gspread.worksheet.JSONResponse]:
         options.setdefault("value_input_option",
                            gspread.utils.ValueInputOption.user_entered)
-        resp = dict()
+        resp = dict(updates=dict(), new_rows=dict())
         if self.updates:
             resp["updates"] = self.online_sheet.batch_update(
                 self.updates, **options)
@@ -323,7 +315,8 @@ class JobsAppsSheetUpdater(GoogleSheet):
                 self.new_rows, row=insert_row_at, **options)
         return resp
 
-    def sort_job_apps_from_gmail(self, gmail: Gmailer, how_many: int = 10):
+    def sort_job_apps_from_gmail(self, gmail: Gmailer, how_many: int = 10,
+                                 ignore_if_subject_contains: str = IGNORABLE):
         """ _summary_
 
         :param gmail: Gmailer, _description_
@@ -331,49 +324,58 @@ class JobsAppsSheetUpdater(GoogleSheet):
         """
         job_updates = dict()
         ignored = dict()
+        skipped = dict()
         for unread_job_email, msg_ID in gmail.get_emails_from(
-            address=self.jobs_email, how_many=how_many, search_terms=["UNSEEN"]
+            address=self.jobs_email, how_many=how_many, unread_only=True
         ):
-            try:
-                job = LinkedInJobFromMsg(unread_job_email,
-                                         debugging=self.debugging)
-                job_app_was = job.get("verb", False)
-                match job_app_was:
-                    case "sent" | "applied":
-                        self.new_rows.append(job.toGoogleSheetsRow())
-                        job_updates[msg_ID] = unread_job_email
-                    case "rejected" | "viewed":
-                        self.update_status_of(job, job_app_was.capitalize())
-                        job_updates[msg_ID] = unread_job_email
-                    # if "Gregory, you have new application updates this week"  # TODO
-                    case _:  # TODO
-                        ignored[msg_ID] = unread_job_email
-            except (AttributeError, IndexError, KeyError, TypeError,
-                    ValueError) as err:
+            if ignore_if_subject_contains in unread_job_email["Subject"]:
                 ignored[msg_ID] = unread_job_email
-                self.debug_or_raise(err, locals())
+            else:
+                try:
+                    job = LinkedInJobFromMsg(unread_job_email,
+                                             debugging=self.debugging)
+                    job_app_was = job.get("verb", False)
+                    match job_app_was:
+                        case "sent" | "applied":
+                            self.new_rows.append(job.toGoogleSheetsRow())
+                            job_updates[msg_ID] = unread_job_email
+                        case "rejected" | "viewed":
+                            self.update_status_of(job,
+                                                  job_app_was.capitalize())
+                            job_updates[msg_ID] = unread_job_email
+                        case _:  # TODO
+                            skipped[msg_ID] = unread_job_email
+                except DATA_ERRORS as err:
+                    skipped[msg_ID] = unread_job_email
+                    self.debug_or_raise(err, locals())
 
         if job_updates:
+            resp = None
             try:
                 resp = self.send_updates()
-                if self.debugging:
-                    print(resp)
-                sent = True
-            except gspread.exceptions.GSpreadException as err:
-                sent = False
+                self.print_summary("Updated job apps sheet from", job_updates)
+                if resp["updates"].get("updatedRows", 0) != len(self.updates):
+                    raise ValueError("Incorrect number of updated rows.")
+                if self.relabel:
+                    for msg_ID in job_updates.keys():
+                        gmail.move_msg(msg_ID, "Inbox", self.relabel)
+            except (gspread.exceptions.GSpreadException, *DATA_ERRORS) as err:
+                skipped.update(job_updates)
                 self.debug_or_raise(err, locals())
-            if not sent:
-                ignored.update(job_updates)
-            elif self.relabel:
-                for msg_ID in job_updates.keys():
-                    gmail.move_msg(msg_ID, "Inbox", self.relabel)
 
         if ignored:
-            gmail.mark_unread([ignored_msg_ID for ignored_msg_ID in ignored])
+            self.print_summary("Ignored", ignored)
+
+        if skipped:
+            gmail.mark_unread([skipped_msg_ID for skipped_msg_ID in skipped])
+            self.print_summary("Failed to add jobs from", skipped)
             if self.debugging:
-                ignoreds = stringify_list([fail_msg["Subject"] for fail_msg
-                                           in ignored.values()])
-                print(f"Failed to add jobs from these messages: {ignoreds}")
-                if self.debugging:
-                    pdb.set_trace()
+                pdb.set_trace()
                 print("done")
+
+    def print_summary(self, did_what_to: str,
+                      messages: dict[bytes, EmailMessage]) -> None:
+        if self.debugging:
+            messages = stringify_list([fail_msg["Subject"] for fail_msg
+                                       in messages.values()])
+            print(f"{did_what_to} these messages: {messages}")

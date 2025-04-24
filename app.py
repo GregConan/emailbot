@@ -4,7 +4,7 @@
 Gmail Bot
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-23
-Updated: 2025-04-15
+Updated: 2025-04-23
 """
 # Import standard libraries
 import argparse
@@ -150,17 +150,17 @@ def get_credentials(cli_args: DotDict[str, Any], config: DotDict,
     # Save credentials and settings into a custom encrypted dictionary
     try:
         cli_args.setdefaults(**config.get_subset_from_lookups(config_paths),
-                             exclude_empties=True)
+                             exclude={None})
         creds = Cryptionary.from_subset_of(cli_args, "address", "debugging",
-                                           "password", exclude_empties=True)
+                                           "password", exclude={None})
 
         # Prompt user for Gmail credentials if they didn't provide them as
         # command-line arguments
         PROMPT = "Please enter your %s: "
         creds.setdefault_or_prompt_for("address", PROMPT % "email address",
-                                       exclude_empties=True)
+                                       exclude={None})
         creds.setdefault_or_prompt_for("password", PROMPT % "password",
-                                       getpass, exclude_empties=True)
+                                       getpass, exclude={None})
         return creds
 
     except KeyError as err:
