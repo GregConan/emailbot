@@ -3,12 +3,13 @@
 """
 Greg Conan: gregmconan@gmail.com
 Created: 2025-02-12
-Updated: 2025-04-16
+Updated: 2025-06-05
 """
 # Import standard libraries
 import pdb
 import sys
 from typing import Any, Callable, Dict, Iterable, List, Mapping
+from typing_extensions import Self
 
 # Import Selenium library
 from selenium import webdriver
@@ -28,7 +29,7 @@ from gconanpy.debug import Debuggable
 from gconanpy.dissectors import Xray
 from gconanpy.IO.local import save_to_json
 # from gconanpy.IO.web import extract_params_from_url
-from gconanpy.seq import to_file_path
+from gconanpy.ToString import ToString
 
 # Import local constants
 try:
@@ -97,7 +98,7 @@ class LinkedInBot(webdriver.Firefox, Debuggable):
 
     @classmethod
     def from_file_at(cls, fpath: str, debugging: bool = False,
-                     out_dir_path: str | None = None) -> "LinkedInBot":
+                     out_dir_path: str | None = None) -> Self:
         super(Debuggable).__init__()  # TODO ?
         pdb.set_trace()
         pass  # TODO
@@ -164,9 +165,9 @@ class LinkedInBot(webdriver.Firefox, Debuggable):
                  saved successfully, or None if the operation failed
         """
         try:  # Write the page's HTML source code contents into new HTML file
-            path = to_file_path(dir_path if dir_path else self.out_dir,
-                                file_name if file_name else self.current_url,
-                                ".html", put_dt_after="_")
+            path = ToString.filepath(dir_path if dir_path else self.out_dir,
+                                     file_name if file_name else self.current_url,
+                                     ".html", put_date_after="_")
             with open(path, "w+") as outfile:
                 outfile.write(self.page_source)
             return path  # Return path to new HTML file
@@ -190,7 +191,7 @@ class LinkedInBot(webdriver.Firefox, Debuggable):
         if not dirpath:
             dirpath = self.out_dir
         fname = f"{__class__.__name__} screenshot "
-        fpath = to_file_path(dirpath, fname, ".png", put_dt_after=" ")
+        fpath = ToString.filepath(dirpath, fname, ".png", put_date_after=" ")
         return fpath if self.save_full_page_screenshot(fpath) else None
 
     def when_ready_click(self, select_by: str, select_value: Any

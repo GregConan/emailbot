@@ -4,7 +4,7 @@
 Gmail Bot
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-23
-Updated: 2025-04-23
+Updated: 2025-06-02
 """
 # Import standard libraries
 import argparse
@@ -14,13 +14,12 @@ from glob import glob
 import os
 import pdb
 import sys
-from typing import Any
 
 # Import remote custom libraries
 from gconanpy.cli import add_new_out_dir_arg_to, Valid
 from gconanpy.debug import ShowTimeTaken
 from gconanpy.dissectors import Xray
-from gconanpy.maps import Cryptionary, DotDict
+from gconanpy.dicts import LazyDotDict, SubCryptionary
 
 # Import local custom libraries
 from emailbot.Gmailer import Gmailer
@@ -33,7 +32,7 @@ def main():
 
     config = ConfigParser()
     config.read(cli_args.configs)
-    config = DotDict.fromConfigParser(config)
+    config = LazyDotDict.fromConfigParser(config)
 
     creds = get_credentials(cli_args, config, address="Gmail.address")
 
@@ -74,10 +73,10 @@ def main():
 
 
 def get_cli_args(parser: argparse.ArgumentParser | None = None
-                 ) -> DotDict[str, Any]:
+                 ) -> LazyDotDict:
     """
     :param parser: argparse.ArgumentParser to get command-line input arguments
-    :return: DotDict[str, Any], all arguments collected from the command line
+    :return: LazyDotDict[str, Any], all arguments collected from the command line
     """
     DEFAULT_CONFIG = "config.ini"
     MSG_CRED = ("Your account {0}. If you don't include this argument, "
@@ -138,31 +137,30 @@ def get_cli_args(parser: argparse.ArgumentParser | None = None
         metavar="FIREFOX_PROFILE_PATH"
         # type=Valid.readable_file
     )
-    return DotDict(vars(parser.parse_args()))
+    return LazyDotDict(vars(parser.parse_args()))
 
 
-def get_credentials(cli_args: DotDict[str, Any], config: DotDict,
-                    **config_paths: str) -> Cryptionary:
+def get_credentials(cli_args: LazyDotDict, config: LazyDotDict,
+                    **config_paths: str) -> SubCryptionary:
     """
     :param parser: argparse.ArgumentParser to get command-line input arguments
-    :return: Cryptionary containing a Gmail account's login credentials
+    :return: SubCryptionary containing a Gmail account's login credentials
     """
     # Save credentials and settings into a custom encrypted dictionary
     try:
         cli_args.setdefaults(**config.get_subset_from_lookups(config_paths),
                              exclude={None})
-        creds = Cryptionary.from_subset_of(cli_args, "address", "debugging",
-                                           "password", exclude={None})
+        creds = SubCryptionary.from_subset_of(
+            cli_args, keys=("address", "debugging", "password"),
+            include_keys=True, values={None}, include_values=False)
 
         # Prompt user for Gmail credentials if they didn't provide them as
         # command-line arguments
         PROMPT = "Please enter your %s: "
-        creds.setdefault_or_prompt_for("address", PROMPT % "email address",
-                                       exclude={None})
-        creds.setdefault_or_prompt_for("password", PROMPT % "password",
-                                       getpass, exclude={None})
-        return creds
-
+        creds.setdefault_or_prompt_for(
+            "address", PROMPT % "email address", exclude={None})
+        creds.setdefault_or_prompt_for(
+            "password", PROMPT % "password", getpass, exclude={None})
     except KeyError as err:
         pdb.set_trace()
         if cli_args.debugging:
@@ -170,6 +168,7 @@ def get_credentials(cli_args: DotDict[str, Any], config: DotDict,
             print()
         else:
             raise err
+    return creds
 
 
 if __name__ == "__main__":

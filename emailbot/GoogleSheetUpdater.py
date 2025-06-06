@@ -4,7 +4,7 @@
 Class to update a Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-11
-Updated: 2025-04-23
+Updated: 2025-06-05
 """
 # Import standard libraries
 from collections.abc import Iterable
@@ -12,7 +12,8 @@ import datetime as dt
 from email.message import EmailMessage
 import os
 import pdb
-from typing import Any, TypeVar
+from typing import Any
+from typing_extensions import Self
 
 # Import third-party PyPI libraries
 # import dask.dataframe as dd
@@ -28,11 +29,11 @@ import pandas as pd  # TODO Switch to gspread_pandas or Dask?
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
+from gconanpy.dicts import DotDict, LazyDotDict
 from gconanpy.find import ReadyChecker
 from gconanpy.IO.local import save_to_json
-from gconanpy.maps import DotDict, LazyDotDict
 from gconanpy.metafunc import DATA_ERRORS
-from gconanpy.seq import stringify_list
+from gconanpy.ToString import stringify_iter
 
 # Import local custom libraries
 try:
@@ -45,8 +46,7 @@ except ModuleNotFoundError:
 
 class GCPAuth(Debuggable):
     """ Google Cloud Platform Credentials Object Factory """
-    CREDS_TYPE = TypeVar("CredsType", Credentials,
-                         OauthCreds, OauthServiceCreds)
+    CREDS_TYPE = Credentials | OauthCreds | OauthServiceCreds
 
     # Base URL for all Google authorization scopes
     SCOPE_URL = "https://www.googleapis.com/auth/"
@@ -88,7 +88,7 @@ class GCPAuth(Debuggable):
                 if value is not None:  # Don't add empty entries
                     jsonified[key] = value
 
-        if "expiry" in jsonified:  # Flatten expiry timestamp
+        if "expiry" in jsonified and creds.expiry:  # Flatten expiry timestamp
             jsonified["expiry"] = creds.expiry.isoformat() + "Z"
 
         return jsonified
@@ -96,7 +96,7 @@ class GCPAuth(Debuggable):
     def get_creds_from(self, credsJSON: str | None = "credentials.json",
                        serviceJSON: str | None = None,  # GOOGLE_SERVICE_JSON,
                        tokenJSON: str | None = None,  # GOOGLE_TOKEN_JSON,
-                       save_to: str | None = None) -> CREDS_TYPE | None:
+                       save_to: str | None = None) -> CREDS_TYPE:
         """ Adapted from \
         https://developers.google.com/docs/api/quickstart/python
 
@@ -186,16 +186,17 @@ class GoogleSheet(LazyDotDict, Debuggable):
 
     def get_df(self, *args, **kwargs) -> pd.DataFrame:
         return self.lazysetdefault("df", self.to_df, args, kwargs,
-                                   exclude_empties=True)
+                                   exclude={None})
 
     def to_df(self, *args, **kwargs) -> pd.DataFrame:
         try:
-            return pd.DataFrame(self.lazysetdefault(
+            df = pd.DataFrame(self.lazysetdefault(
                 "sheet", self.online_sheet.get_all_records, args, kwargs,
-                exclude_empties=True))
+                exclude={None}))
         except (gspread.exceptions.GSpreadException, TypeError, ValueError
                 ) as err:
             self.debug_or_raise(err, locals())
+        return df
 
 
 class JobsAppsSheetUpdater(GoogleSheet):
@@ -234,7 +235,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
         self.relabel = relabel
 
         self.new_rows: list[list[str]] = list()
-        self.updates: list[dict[str, list[list]]] = list()
+        self.updates: list[dict[str, str | list[list]]] = list()
 
         try:
             auth = GCPAuth(debugging=debugging)
@@ -249,7 +250,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
     @classmethod
     def from_config(cls, config: DotDict, sep: str = ".",
                     default: Any | None = None, debugging: bool = False,
-                    **config_vars: str):  # -> "GoogleSheetUpdater"
+                    **config_vars: str) -> Self:
         """ _summary_
 
         :param config: DotDict, _description_
@@ -262,14 +263,15 @@ class JobsAppsSheetUpdater(GoogleSheet):
         return cls(**config.get_subset_from_lookups(config_vars, sep, default),
                    debugging=debugging)
 
-    def to_df(self):
+    def to_df(self) -> pd.DataFrame:
         try:
-            return super(JobsAppsSheetUpdater, self).to_df(
+            df = super(JobsAppsSheetUpdater, self).to_df(
                 expected_headers=self.COL_NAMES.keys()
             ).rename(columns=self.COL_NAMES)
         except (gspread.exceptions.GSpreadException, TypeError, ValueError
                 ) as err:
             self.debug_or_raise(err, locals())
+        return df
 
     def find_row_of_job(self, job: LinkedInJob) -> int:
         with ReadyChecker(self.get_df(), ("company", "name", "date"),
@@ -293,7 +295,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
         return df.index.item()
 
     def update_status_of(self, job: LinkedInJobFromMsg, new_status: str
-                         ) -> gspread.worksheet.JSONResponse:
+                         ) -> None:
         job_row = self.find_row_of_job(job)
         if self.df.loc[job_row, "status"] != "Rejected":
             self.df.loc[job_row, "status"] = new_status  # TODO Unneeded?
@@ -306,7 +308,8 @@ class JobsAppsSheetUpdater(GoogleSheet):
                      ) -> dict[str, gspread.worksheet.JSONResponse]:
         options.setdefault("value_input_option",
                            gspread.utils.ValueInputOption.user_entered)
-        resp = dict(updates=dict(), new_rows=dict())
+        resp: dict[str, gspread.worksheet.JSONResponse] = \
+            dict(updates=dict(), new_rows=dict())
         if self.updates:
             resp["updates"] = self.online_sheet.batch_update(
                 self.updates, **options)
@@ -316,7 +319,8 @@ class JobsAppsSheetUpdater(GoogleSheet):
         return resp
 
     def sort_job_apps_from_gmail(self, gmail: Gmailer, how_many: int = 10,
-                                 ignore_if_subject_contains: str = IGNORABLE):
+                                 ignore_if_subject_contains: str = IGNORABLE
+                                 ) -> None:
         """ _summary_
 
         :param gmail: Gmailer, _description_
@@ -373,9 +377,13 @@ class JobsAppsSheetUpdater(GoogleSheet):
                 pdb.set_trace()
                 print("done")
 
+        if self.debugging and not any((ignored, skipped, job_updates)):
+            print("No messages processed.")
+            pdb.set_trace()
+
     def print_summary(self, did_what_to: str,
                       messages: dict[bytes, EmailMessage]) -> None:
         if self.debugging:
-            messages = stringify_list([fail_msg["Subject"] for fail_msg
+            msg_strs = stringify_iter([fail_msg["Subject"] for fail_msg
                                        in messages.values()])
-            print(f"{did_what_to} these messages: {messages}")
+            print(f"{did_what_to} these messages: {msg_strs}")

@@ -4,7 +4,7 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-04-15
+Updated: 2025-06-05
 """
 # Import standard libraries
 from collections.abc import Callable, Iterable, Mapping
@@ -21,12 +21,29 @@ from typing import Any
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
-from gconanpy.dissectors import Corer, Xray
+from gconanpy.dissectors import Corer
 from gconanpy.IO.local import LoadedTemplate
-from gconanpy.seq import stringify
+from gconanpy.ToString import stringify
 
 
 # NOTE: Very much a work in progress.
+
+
+class BytesOrStrMeta(type):  # TODO Move to gconanpy.metafunc?
+    _Checker = Callable[[Any, type | tuple[type, ...]], bool]
+
+    def _check(cls, thing: Any, check: _Checker) -> bool:
+        return check(thing, (bytes, str))
+
+    def __instancecheck__(cls, instance: Any) -> bool:
+        return cls._check(instance, isinstance)
+
+    def __subclasscheck__(cls, subclass: Any) -> bool:
+        return cls._check(subclass, issubclass)
+
+
+class BytesOrStr(metaclass=BytesOrStrMeta):  # TODO Move to gconanpy.metafunc?
+    """ Any instance of bytes or str is a BytesOrStr instance. """
 
 
 class ReplyTo(EmailMessage, Debuggable):
@@ -63,9 +80,10 @@ class ReplyTo(EmailMessage, Debuggable):
             template_fields["sender_name"] = \
                 template_fields.pop("name", self.name)
             assert self.template.fields.issuperset(template_fields.keys())
-            return self.template.substitute(template_fields)
+            to_write = self.template.substitute(template_fields)
         except AssertionError as err:
             self.debug_or_raise(err, locals())
+        return to_write
 
     def get_name(self) -> list[str]:  # , msg: EmailMessage
         return [re.sub(r'[^a-zA-Z]', '', x)
@@ -113,7 +131,7 @@ class Gmailer(Debuggable):
                             dt.datetime.now().astimezone()))
         return reply
 
-    def fetch(self, msg_ID: str | bytes, msg_parts: str = MSG_FMT
+    def fetch(self, msg_ID: str, msg_parts: str = MSG_FMT
               ) -> EmailMessage:
         """
         :param msg_ID: str | bytes containing only an int, the unique ID \
@@ -122,18 +140,20 @@ class Gmailer(Debuggable):
         :return: EmailMessage retrieved via IMAP
         """
         try:
-            fetched = Corer().core(self.con.fetch(msg_ID, msg_parts))
-            return email.message_from_bytes(s=fetched, _class=EmailMessage)
+            fetched = Corer().safe_core(self.con.fetch(msg_ID, msg_parts),
+                                        as_type=bytes)
+            msg = email.message_from_bytes(s=fetched, _class=EmailMessage)
         except (AttributeError, TypeError) as err:
             self.debug_or_raise(err, locals())
+        return msg
 
     def get_emails_from(self, address: str | None = None,
                         folder: str = "Inbox", how_many: int = 1,
                         subject_part: str | None = None,
-                        search_keywords: Mapping[str, Any] = dict(),
+                        search_keywords: dict[str, Any] = dict(),
                         unread_only: bool = False
                         # search_terms: Iterable[str] = list()
-                        ) -> list[tuple[EmailMessage, bytes]]:
+                        ) -> list[tuple[EmailMessage, bytes | str]]:
         """ Get most recent {how_many} emails 
 
         :param folder: str, folder/box to get emails from, defaults to "Inbox"
@@ -141,6 +161,7 @@ class Gmailer(Debuggable):
         :return: List[EmailMessage], _description_
         """
         self.con.select(folder)
+        result: list[tuple[EmailMessage, bytes | str]] = list()
 
         # Build search query
         if address:
@@ -152,7 +173,7 @@ class Gmailer(Debuggable):
             filters.append("UNSEEN")
 
         try:  # Execute search query
-            searched = self.search(*filters)
+            searched = stringify(self.search(*filters))
 
             # If search came up empty, return an empty list
             if searched == "OK":
@@ -165,9 +186,12 @@ class Gmailer(Debuggable):
                     email_IDs = email_IDs[-how_many:]
                 result = [(self.fetch(msg_ID), msg_ID)
                           for msg_ID in reversed(email_IDs)]
-            return result
+            if not result and self.debugging:
+                print("No emails found.")
+                pdb.set_trace()
         except (AttributeError, imaplib.IMAP4.error) as err:
             self.debug_or_raise(err, locals())
+        return result
 
     def is_logged_out(self) -> bool:
         """
@@ -178,14 +202,14 @@ class Gmailer(Debuggable):
 
     def load_templates_from(self, *template_fpaths: str) -> None:
         """
-        :param template_fpaths: unpacked List[str] of valid paths to existing\
-                                text files to convert into string.Templates
+        :param template_fpaths: list[str] of valid paths to existing \
+                                text files to convert into `string.Templates`
         """
         for template_fpath in template_fpaths:
             name = os.path.splitext(os.path.basename(template_fpath))[0]
             self.templates[name] = LoadedTemplate.from_file_at(template_fpath)
 
-    def login(self, address: str, password: str | None = None) -> Exception | None:
+    def login(self, address: str, password: str) -> Exception | None:
         """ Login and connect to a Gmail account with user credentials.
 
         :param address: str, user Gmail account email address
@@ -251,10 +275,10 @@ class Gmailer(Debuggable):
         except imaplib.IMAP4.error as err:
             self.debug_or_raise(err, locals())
 
-    def search(self, *filters: str) -> bytes | str:
+    def search(self, *filters: str) -> BytesOrStr:
         """ Search the contents of a Gmail account.
 
         :return: Any, _description_
         """
-        return Corer(debugging=self.debugging
-                     ).core(self.con.search(None, *filters))
+        return Corer(debugging=self.debugging).safe_core(
+            self.con.search(None, *filters), as_type=BytesOrStr)
