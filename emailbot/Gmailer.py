@@ -4,7 +4,7 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-06-05
+Updated: 2025-06-07
 """
 # Import standard libraries
 from collections.abc import Callable, Iterable, Mapping
@@ -148,7 +148,7 @@ class Gmailer(Debuggable):
         return msg
 
     def get_emails_from(self, address: str | None = None,
-                        folder: str = "Inbox", how_many: int = 1,
+                        folder: str = "Inbox", how_many: int | None = None,
                         subject_part: str | None = None,
                         search_keywords: dict[str, Any] = dict(),
                         unread_only: bool = False
@@ -182,7 +182,7 @@ class Gmailer(Debuggable):
 
                 # Otherwise, fetch and return the searched-for messages
                 email_IDs = searched.split()
-                if how_many < len(email_IDs):
+                if how_many is not None and how_many < len(email_IDs):
                     email_IDs = email_IDs[-how_many:]
                 result = [(self.fetch(msg_ID), msg_ID)
                           for msg_ID in reversed(email_IDs)]

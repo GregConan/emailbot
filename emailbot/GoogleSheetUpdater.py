@@ -4,7 +4,7 @@
 Class to update a Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-11
-Updated: 2025-06-05
+Updated: 2025-06-07
 """
 # Import standard libraries
 from collections.abc import Iterable
@@ -318,9 +318,9 @@ class JobsAppsSheetUpdater(GoogleSheet):
                 self.new_rows, row=insert_row_at, **options)
         return resp
 
-    def sort_job_apps_from_gmail(self, gmail: Gmailer, how_many: int = 10,
-                                 ignore_if_subject_contains: str = IGNORABLE
-                                 ) -> None:
+    def sort_job_apps_from_gmail(
+            self, gmail: Gmailer, how_many: int | None = None,
+            ignore_if_subject_contains: str = IGNORABLE) -> None:
         """ _summary_
 
         :param gmail: Gmailer, _description_

@@ -5,7 +5,7 @@ Class to insert a row with LinkedIn job application details into a \
     Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-16
-Updated: 2025-06-05
+Updated: 2025-06-07
 """
 # Import standard libraries
 # from collections import namedtuple
@@ -105,8 +105,9 @@ class LinkedInJob(DotDict, Debuggable):
     contact: str = "N/A"
     cols = dict(date=1, company=2, name=3, url=3, status=4, src=5, contact=6)
 
-    # TODO CHANGE isdate(A{}) CELL TO ACCOUNT FOR ADDING/UPDATING MULTIPLE ROWS
-    status = '=if(isdate(A2),if(today()-A2>30,"Stale","Active"),"Not Yet")'
+    status = '=let(datecell, INDIRECT("A" & TEXT(row(), "#"), TRUE), ' \
+        'if(isdate(datecell),if(today()-datecell>30,"Stale","Active"),' \
+        '"Not Yet"))'
 
     def filter_df_by_detail(self, df: DataFrame, detail: str) -> DataFrame:
         shortname = f"short_{detail}"
@@ -161,43 +162,57 @@ class LinkedInJobFromMsg(LinkedInJob, LazyDotDict, Debuggable):
             self.shredded = Shredder(debugging=self.debugging
                                      ).shred(self.body)
             self.date = self.get_date_from_body()
-            self.get_details_from_link()
+            self.short_company = self.shorten_company(self.company)
+
+            self.found_name = False
+            for link_el in self.body.find_all("a"):
+                attrs: dict | None = getattr(link_el, "attrs", None)
+                if attrs:
+                    link = attrs.get("href", None)
+                    if link:
+                        self.get_details_from_link(link, link_el.text.strip())
+                if self.has_all_details("name", "verb", "url"):
+                    break
+
+            if self.get("name", None):
+                self.short_name = self.shorten_name(self.name)
+            else:
+                self.debug_or_raise(ValueError("Job name not found."),
+                                    locals())
 
             # TODO Only iterate over the body/shredded once?
 
-    def get_details_from_link(self):
-        for link_el in self.body.find_all("a"):
-            attrs: dict | None = getattr(link_el, "attrs", None)
-            if attrs:
-                link = attrs.get("href", None)
-                if link:
-                    if "/jobs/view/" in link:
-                        self.url = URL(link).without_params()
-                    if "rejected" in link:
-                        self.verb = "rejected"
-                    elif "viewed" in link:
-                        self.verb = "viewed"
-                    if self.company in link_el.text:
-                        self.name = str.split(link_el.text, self.company, 1
-                                              )[0].strip()
+    def has_all_details(self, *details: str) -> bool:
+        return None not in {self.get(detail, None) for detail in details}
 
-            if None not in {self.get("verb", None), self.get("name", None),
-                            self.get("url", None)}:
-                break
+    def get_details_from_link(self, url: str, text: str):
+        # If this is a LinkedIn job posting URL, then get details from it
+        if "/jobs/view/" in url:
+            if not self.get("url", None):  # Save job posting base URL
+                self.url = URL(url).without_params()
 
-        try:
-            if not self.get("name", None):
-                raise ValueError("Job name not found.")
-        except ValueError as err:
-            self.debug_or_raise(err, locals())
+            if text:  # If the link has text, use it to get the job name
+                if not self.get("name", None):
+                    self.name = text
 
-        try:
-            for detail in ("name", "company"):
-                self.lazysetdefault(f"short_{detail}",
-                                    getattr(self, f"shorten_{detail}"),
-                                    [self[detail]])
-        except (AttributeError, TypeError, ValueError) as err:
-            self.debug_or_raise(err, locals())
+                # The first link has the job and company names. The second
+                # has only the job name. Trim the first using the second.
+                elif not self.found_name:
+                    if self.name.startswith(text):
+                        self.name = text
+                        self.found_name = True
+
+                # Ensure job name saved from link (TODO redundant?)
+                for company_name in {self.company, self.short_company}:
+                    if not self.found_name and company_name in text:
+                        self.name = text.split(company_name, 1)[0].strip()
+                        self.found_name = True
+
+        # Get the verb: what happened to my application? It was...
+        if "rejected" in url:
+            self.verb = "rejected"
+        elif "viewed" in url:
+            self.verb = "viewed"
 
     @staticmethod
     def get_body_of(msg: EmailMessage) -> bs4.BeautifulSoup:
@@ -218,12 +233,21 @@ class LinkedInJobFromMsg(LinkedInJob, LazyDotDict, Debuggable):
 
         return body
 
-    def stripdate(self, datestr: str):
+    def parse_date(self, datestr: str) -> dt._Date:
+        """ 
+        :param datestr: str representing a specific date.
+        :return: datetime._Date representing that date.
+        """
+        parsed_date = None
         for dtformat in self.APP_DATE_FORMATS:
             try:
-                return dt.datetime.strptime(datestr, dtformat).date()
+                parsed_date = dt.datetime.strptime(datestr, dtformat).date()
             except DATA_ERRORS:
                 pass
+        if parsed_date:
+            return parsed_date
+        else:
+            raise ValueError(f"Failed to parse date from {datestr}")
 
     def get_date_from_body(self) -> str | None:
         """ Parse message to get the job application submission date
@@ -236,7 +260,7 @@ class LinkedInJobFromMsg(LinkedInJob, LazyDotDict, Debuggable):
                 parsed = Regextract.parse(self.REGX.EMAIL_APP_DATE, part)
                 assert parsed
                 if parsed["date"] is not None:
-                    job_app_date = self.stripdate(parsed["date"])
+                    job_app_date = self.parse_date(parsed["date"])
                 elif parsed["delta"] is not None and \
                         parsed["unit"] is not None:
                     timedeltattrs = {parsed["delta"]: float(parsed["unit"])}
@@ -272,19 +296,20 @@ class LinkedInJobFromMsg(LinkedInJob, LazyDotDict, Debuggable):
 
     @classmethod
     def shorten_company(cls, entire_name: str, max_len: int = 24) -> str:
-        is_short_enough = cls.make_name_len_checker(max_len)
         name = entire_name
-        if not is_short_enough(name):
-            with ReadyChecker(to_check=name.strip(), iter_over=cls.UNNEEDED,
-                              ready_if=is_short_enough) as check:
-                while check.is_not_ready():
-                    check(str.replace(check.to_check, next(check), " "
-                                      ).strip())
-            name = cls.check_name(to_check=check.to_check.strip(),
-                                  iter_over=cls.ABBR.COMPANY,
-                                  ready_if=is_short_enough)
-            name, _ = spliterate(parts=name.split(), ready_if=is_short_enough)
-        # TODO seq.truncate
+        for removable in cls.UNNEEDED:
+            name = entire_name.replace(removable, " ").strip()
+
+        is_short_enough = cls.make_name_len_checker(max_len)
+        for word, abbr in cls.ABBR.COMPANY:
+            if is_short_enough(name):
+                name = name.replace(word, abbr).strip()
+            else:
+                break
+
+        name, _ = spliterate(parts=name.split(), ready_if=is_short_enough)
+
+        # TODO return ToString(name).truncate(max_len)?
         return name if is_short_enough(name) else name[:max_len]
 
     @classmethod
