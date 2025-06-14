@@ -4,7 +4,7 @@
 Class to update a Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-11
-Updated: 2025-06-07
+Updated: 2025-06-10
 """
 # Import standard libraries
 from collections.abc import Iterable
@@ -29,7 +29,8 @@ import pandas as pd  # TODO Switch to gspread_pandas or Dask?
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
-from gconanpy.dicts import DotDict, LazyDotDict
+from gconanpy.mapping import map_funcs
+from gconanpy.mapping.dicts import DotDict, LazyDotDict
 from gconanpy.find import ReadyChecker
 from gconanpy.IO.local import save_to_json
 from gconanpy.metafunc import DATA_ERRORS
@@ -358,7 +359,9 @@ class JobsAppsSheetUpdater(GoogleSheet):
             try:
                 resp = self.send_updates()
                 self.print_summary("Updated job apps sheet from", job_updates)
-                if resp["updates"].get("updatedRows", 0) != len(self.updates):
+                n_updates = map_funcs.chain_get(resp["updates"], (
+                    "updatedRows", "totalUpdatedRows"), 0)
+                if n_updates != len(self.updates):
                     raise ValueError("Incorrect number of updated rows.")
                 if self.relabel:
                     for msg_ID in job_updates.keys():

@@ -4,7 +4,7 @@
 Gmail Bot
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-23
-Updated: 2025-06-02
+Updated: 2025-06-10
 """
 # Import standard libraries
 import argparse
@@ -19,7 +19,7 @@ import sys
 from gconanpy.cli import add_new_out_dir_arg_to, Valid
 from gconanpy.debug import ShowTimeTaken
 from gconanpy.dissectors import Xray
-from gconanpy.dicts import LazyDotDict, SubCryptionary
+from gconanpy.mapping.dicts import LazyDotDict, SubCryptionary
 
 # Import local custom libraries
 from emailbot.Gmailer import Gmailer
@@ -67,7 +67,7 @@ def main():
                              options=options,
                              out_dir_path=cli_args.output) as bot:
                 pdb.set_trace()
-                bot.login(creds.address, creds.password)
+                bot.login(creds["address"], creds["password"])
                 pdb.set_trace()
                 print("done")
 

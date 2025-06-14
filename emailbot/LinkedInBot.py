@@ -3,7 +3,7 @@
 """
 Greg Conan: gregmconan@gmail.com
 Created: 2025-02-12
-Updated: 2025-06-05
+Updated: 2025-06-10
 """
 # Import standard libraries
 import pdb
@@ -99,11 +99,11 @@ class LinkedInBot(webdriver.Firefox, Debuggable):
     @classmethod
     def from_file_at(cls, fpath: str, debugging: bool = False,
                      out_dir_path: str | None = None) -> Self:
-        super(Debuggable).__init__()  # TODO ?
+        # super(Debuggable).__init__()  # TODO ?
         pdb.set_trace()
         pass  # TODO
 
-    def get_job_details_of(self, job_details: WebElement) -> Dict[str, Any]:
+    def get_job_details_of(self, job_details: WebElement) -> dict[str, Any]:
         pdb.set_trace()
         pass  # TODO
 

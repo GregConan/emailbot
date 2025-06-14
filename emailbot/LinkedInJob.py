@@ -5,29 +5,27 @@ Class to insert a row with LinkedIn job application details into a \
     Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-16
-Updated: 2025-06-07
+Updated: 2025-06-13
 """
 # Import standard libraries
-# from collections import namedtuple
-from collections.abc import Callable, Iterable
 import datetime as dt
 from email.message import EmailMessage
-import pdb
 import re
+from typing import NamedTuple
 
 # Import third-party PyPI libraries
-import bs4
+from bs4 import BeautifulSoup
 from pandas import DataFrame
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
-from gconanpy.dicts import DotDict, LazyDotDict
-from gconanpy.dissectors import Shredder  # , Xray
+from gconanpy.mapping.dicts import DotDict, FancyDict
+from gconanpy.dissectors import Shredder
 from gconanpy.extend import weak_dataclass
-from gconanpy.find import ReadyChecker, spliterate
+from gconanpy.find import Spliterator
 from gconanpy.IO.web import URL
 from gconanpy.metafunc import DATA_ERRORS
-from gconanpy.reg import Regextract
+from gconanpy.reg import Abbreviations, Regextract
 
 
 class LinkedInJobNameRegex(list[re.Pattern]):
@@ -88,8 +86,113 @@ class LinkedInJobNameRegex(list[re.Pattern]):
     def normalize(cls, a_str: str) -> str:
         return cls.END.sub("", cls.START.sub("", cls.SLASH.sub("/", a_str)))
 
+    def remove_from(self, string: str, max_len: int,
+                    but_keep: str = "") -> str:
+        for removable in self:
+            if len(string) <= max_len:
+                break
+            else:
+                shortened = removable.sub("", name)
+                if shortened and but_keep in shortened:
+                    name = shortened
+        return name
 
-# Job = namedtuple("Job", "date company name URL src contact")
+
+class LinkedInJobDetailParser(LinkedInJobNameRegex):
+    class ABBR(NamedTuple):
+        COMPANY = Abbreviations(Technology="Tech", Solution="Soln")
+        JOB = Abbreviations(Senior="Sr", Junior="Jr")
+    APP_DATE_PREFIX = "Applied on "
+    APP_DATE_FORMATS = ("%B %d, %Y", "%b %d", "%b %d, %Y", "%B %d")
+    MSG_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S %z (%Z)"
+    UNNEEDED = (", Inc.", "Inc", "L.L.C", "LLC", "The")
+
+    def parse_date_from(self, string: str, msg_date: dt.datetime
+                        ) -> dt.date | None:
+        """ 
+        :param string: str, text that might contain a date
+        :param msg_date: dt.datetime, the date that an email message was sent
+        :return: dt.date, the date parsed from the `string` if any; else \
+            None if the string doesn't contain a recognizable date
+        """
+        try:
+            parsed = Regextract.parse(self.EMAIL_APP_DATE, string)
+            assert parsed
+
+            if parsed["delta"] is not None and parsed["unit"] is not None:
+                timedeltattrs = {parsed["delta"]: float(parsed["unit"])}
+                time_since_app = dt.timedelta(**timedeltattrs)
+                return (msg_date - time_since_app).date()
+
+            elif parsed["date"] is not None:
+                for dtformat in self.APP_DATE_FORMATS:
+                    try:
+                        return dt.datetime.strptime(parsed["date"],
+                                                    dtformat).date()
+                    except DATA_ERRORS:
+                        pass
+        except (AssertionError, TypeError, ValueError):
+            pass
+
+    def parse_subject_of_email(self, msg: EmailMessage
+                               ) -> dict[str, str | None]:
+        """
+        :param msg: EmailMessage, an email sent from LinkedIn noreply address
+        :return: dict[str, str | None], details retrieved from subject of \
+            email `msg`: the job name, the company that posted it, and/or \
+            the job application status
+        """
+        return Regextract.parse(self.EMAIL_SUBJECT,
+                                msg["Subject"].replace("\r", ""))
+
+    @classmethod
+    def shorten_company(cls, name: str, max_len: int = 24) -> str:
+        """ Trim, truncate, rearrange, and abbreviate the name of a company \
+            that posted a job on LinkedIn to remove unneeded details until \
+            the company name fits into a maximum length requirement.
+
+        :param name: str, the title of a company that posted a LinkedIn job
+        :param max_len: int, the greatest acceptable number of characters in \
+            the shortened name to return; defaults to 24
+        :return: str, the shortened company name
+        """
+        for removable in cls.UNNEEDED:
+            name = name.replace(removable, " ").strip()
+        name = cls.ABBR.COMPANY.abbreviate(name, max_len)
+        name, _ = Spliterator(max_len).spliterate(name.split())
+
+        # TODO return ToString(name).truncate(max_len)?
+        return name if len(name) <= max_len else name[:max_len]
+
+    def shorten_name(self, name: str, max_len: int = 30) -> str:
+        """ Trim, truncate, rearrange, and abbreviate the name of a LinkedIn \
+            job posting to remove unneeded details until the name fits into a \
+            maximum length requirement.
+
+        :param name: str, the title of a LinkedIn job posting
+        :param max_len: int, the greatest acceptable number of characters in \
+            the shortened name to return; defaults to 30
+        :return: str, the shortened LinkedIn job posting title/name
+        """
+        if len(name) > max_len:
+            splitter = Spliterator(max_len)
+            parts = [x for x in self.BOUND.split(name.strip())]
+            name, title_found = splitter.spliterate(
+                parts, pop_ix=0, get_target=self.TITLE.search)
+            title_noun = title_found.groups()[0] if title_found else ""
+            name = self.remove_from(name, max_len, but_keep=title_noun)
+            name = self.ABBR.JOB.abbreviate(name, max_len)
+            words = name.split()
+            title_noun_pos = words.index(title_noun) + 1 if title_noun else 1
+            name, _ = splitter.spliterate(words, min_parts=title_noun_pos)
+            name, _ = splitter.spliterate(name.split(), pop_ix=0)
+            name = self.normalize(name).strip()
+            name = name.removesuffix(".").removesuffix("s")
+            if len(name) > max_len:
+                name = name[:name.rfind(" ", len(name) - max_len) + 1]
+        return name
+
+
 @weak_dataclass
 class LinkedInJob(DotDict, Debuggable):
     # Input parameters without default values
@@ -121,7 +224,7 @@ class LinkedInJob(DotDict, Debuggable):
     def toGoogleSheetsRow(self) -> list[str]:
         """
         :return: list[str] of values to insert into a Google Sheet row: \
-            [date, company, name+url, status, src, contact]
+            [date, company, hyperlink(name->url), status, src, contact]
         """
         try:
             row = [self.date, self.short_company,
@@ -132,60 +235,75 @@ class LinkedInJob(DotDict, Debuggable):
         return row
 
 
-class LinkedInJobFromMsg(LinkedInJob, LazyDotDict, Debuggable):
-    ABBR = DotDict(COMPANY=(("Technology", "Tech"),
-                            ("Solution", "Soln")),
-                   JOB=(("Senior", "Sr"), ("Junior", "Jr")))
-    APP_DATE_PREFIX = "Applied on "
-    APP_DATE_FORMATS = ("%B %d, %Y", "%b %d", "%b %d, %Y", "%B %d")
+class LinkedInJobFromMsg(LinkedInJob, FancyDict, Debuggable):
     MSG_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S %z (%Z)"
-    REGX = LinkedInJobNameRegex()
-    UNNEEDED = (", Inc.", "Inc", "L.L.C", "LLC", "The")
+    REGX = LinkedInJobDetailParser()
     URL_PREFIX = "https://www.linkedin.com/jobs/view/"
 
     def __init__(self, msg: EmailMessage, debugging: bool = False) -> None:
-        # Instantiate LinkedInJob using the details from the message
-        LazyDotDict.__init__(self)
-        self.debugging = debugging
-        self.update(Regextract.parse(self.REGX.EMAIL_SUBJECT,
-                                     msg["Subject"].replace("\r", "")))
+        """ Instantiate LinkedInJob using the details from the message.
+
+        :param msg: EmailMessage to extract LinkedIn job posting details from.
+        :param debugging: bool, True to pause and interact on error, else \
+            False to raise errors/exceptions; defaults to False.
+        """
+        FancyDict.__init__(self)
+        Debuggable.__init__(self, debugging=debugging)
+        self.update(self.REGX.parse_subject_of_email(msg))
         try:
             self.msg_date = dt.datetime.strptime(msg["Date"],
                                                  self.MSG_DATE_FORMAT)
-        except (TypeError, ValueError) as err:
+            self.short_company = self.REGX.shorten_company(self.company)
+        except (AttributeError, TypeError, ValueError) as err:
             self.debug_or_raise(err, locals())
-        if "company" not in self:
-            pdb.set_trace()
-            print()
-        else:
-            self.body = self.get_body_of(msg)
-            self.shredded = Shredder(debugging=self.debugging
-                                     ).shred(self.body)
-            self.date = self.get_date_from_body()
-            self.short_company = self.shorten_company(self.company)
 
-            self.found_name = False
-            for link_el in self.body.find_all("a"):
-                attrs: dict | None = getattr(link_el, "attrs", None)
-                if attrs:
-                    link = attrs.get("href", None)
-                    if link:
-                        self.get_details_from_link(link, link_el.text.strip())
-                if self.has_all_details("name", "verb", "url"):
-                    break
+        # Find the job application submission date in the email body
+        self.body = self.get_body_of(msg)
+        self.shredded = Shredder(debugging=self.debugging).shred(self.body)
+        for part in self.shredded:
+            app_date = self.REGX.parse_date_from(part, self.msg_date)
+            if app_date is not None:
+                self.date = self.correct_date(app_date)
+                break
 
-            if self.get("name", None):
-                self.short_name = self.shorten_name(self.name)
-            else:
-                self.debug_or_raise(ValueError("Job name not found."),
-                                    locals())
+        # Find the job name, posting URL, & job status/verb in the email body
+        self.found_name = False
+        for link_el in self.body.find_all("a"):
+            attrs: dict | None = getattr(link_el, "attrs", None)
+            if attrs:
+                link = attrs.get("href", None)
+                if link:
+                    self.get_details_from_link(link, link_el.text.strip())
+            if self.has_all(keys=("name", "verb", "url"), exclude={None}):
+                break
+        if not self.get("name", None):
+            self.debug_or_raise(ValueError("Job name not found."), locals())
 
-            # TODO Only iterate over the body/shredded once?
+        else:  # Abbreviate the job name
+            self.short_name = self.REGX.shorten_name(self.name)
 
-    def has_all_details(self, *details: str) -> bool:
-        return None not in {self.get(detail, None) for detail in details}
+    def correct_date(self, job_app_date: dt.date) -> str:
+        """ Correct the parsed job application date if it has issues
 
-    def get_details_from_link(self, url: str, text: str):
+        :param job_app_date: dt.date, the date a LinkedIn job application \
+            was submitted; verify/correct this
+        :return: str, corrected and ISO-formatted `job_app_date`
+        """
+        today = dt.date.today()
+        if job_app_date.year == 1900:  # => no year in msg; correct that
+            job_app_date = job_app_date.replace(
+                year=self.get("msg_date", today).year)
+        if (job_app_date - today).days > 0:  # No job apps dated in future
+            job_app_date = today
+        return job_app_date.isoformat()  # to string: YYYY-MM-DD
+
+    def get_details_from_link(self, url: str, text: str) -> None:
+        """ Given the text and URL of a hyperlink parsed from a web object, \
+            try to get the name, URL, and status of a LinkedIn job application
+
+        :param url: str to save parts of if it's a LinkedIn job posting URL
+        :param text: str to save part of if it's a LinkedIn job posting name
+        """
         # If this is a LinkedIn job posting URL, then get details from it
         if "/jobs/view/" in url:
             if not self.get("url", None):  # Save job posting base URL
@@ -208,15 +326,18 @@ class LinkedInJobFromMsg(LinkedInJob, LazyDotDict, Debuggable):
                         self.name = text.split(company_name, 1)[0].strip()
                         self.found_name = True
 
-        # Get the verb: what happened to my application? It was...
+        # Get the verb: what happened to the application? It was...
         if "rejected" in url:
             self.verb = "rejected"
         elif "viewed" in url:
             self.verb = "viewed"
 
     @staticmethod
-    def get_body_of(msg: EmailMessage) -> bs4.BeautifulSoup:
-
+    def get_body_of(msg: EmailMessage) -> BeautifulSoup:
+        """ 
+        :param msg: EmailMessage
+        :return: bs4.BeautifulSoup, the body of the email `msg`.
+        """
         # Convert EmailMessage to valid HTML body string
         msgstr = msg.as_string().replace("\r", "")
         despaced = msgstr.replace("=\n", "").replace("=3D", "=")
@@ -225,132 +346,10 @@ class LinkedInJobFromMsg(LinkedInJob, LazyDotDict, Debuggable):
         bodystr = despaced[start_ix:end_ix]
 
         # Convert HTML body string to BeautifulSoup to parse msg contents
-        body = bs4.BeautifulSoup(bodystr, features="html.parser")
+        body = BeautifulSoup(bodystr, features="html.parser")
 
         # Filter out more useless whitespace from the message
         for blank_str in body.find_all(string=" "):
             blank_str.extract()  # Remove from BeautifulSoup XML element tree
 
         return body
-
-    def parse_date(self, datestr: str) -> dt._Date:
-        """ 
-        :param datestr: str representing a specific date.
-        :return: datetime._Date representing that date.
-        """
-        parsed_date = None
-        for dtformat in self.APP_DATE_FORMATS:
-            try:
-                parsed_date = dt.datetime.strptime(datestr, dtformat).date()
-            except DATA_ERRORS:
-                pass
-        if parsed_date:
-            return parsed_date
-        else:
-            raise ValueError(f"Failed to parse date from {datestr}")
-
-    def get_date_from_body(self) -> str | None:
-        """ Parse message to get the job application submission date
-
-        :return: str | None, _description_
-        """
-        job_app_date = None
-        for part in self.shredded:
-            try:
-                parsed = Regextract.parse(self.REGX.EMAIL_APP_DATE, part)
-                assert parsed
-                if parsed["date"] is not None:
-                    job_app_date = self.parse_date(parsed["date"])
-                elif parsed["delta"] is not None and \
-                        parsed["unit"] is not None:
-                    timedeltattrs = {parsed["delta"]: float(parsed["unit"])}
-                    time_since_app = dt.timedelta(**timedeltattrs)
-                    job_app_date = (self.msg_date - time_since_app).date()
-            except (AssertionError, TypeError, ValueError):  # , *DATA_ERRORS):
-                pass
-            if job_app_date:
-                break
-
-        if not job_app_date:
-            if self.debugging:
-                pdb.set_trace()
-            else:
-                raise ValueError
-        else:
-
-            # Correct job app date if it has issues
-            today = dt.date.today()
-            if job_app_date.year == 1900:  # => no year in msg; correct that
-                job_app_date = job_app_date.replace(
-                    year=self.get("msg_date", today).year)
-            if (job_app_date - today).days > 0:  # No job apps dated in future
-                job_app_date = today
-            job_app_date = job_app_date.isoformat()  # to string: YYYY-MM-DD
-        return job_app_date
-
-    @staticmethod
-    def make_name_len_checker(max_len: int) -> Callable[[str], bool]:
-        def is_short_enough(name: str) -> bool:
-            return max_len > len(name)
-        return is_short_enough
-
-    @classmethod
-    def shorten_company(cls, entire_name: str, max_len: int = 24) -> str:
-        name = entire_name
-        for removable in cls.UNNEEDED:
-            name = entire_name.replace(removable, " ").strip()
-
-        is_short_enough = cls.make_name_len_checker(max_len)
-        for word, abbr in cls.ABBR.COMPANY:
-            if is_short_enough(name):
-                name = name.replace(word, abbr).strip()
-            else:
-                break
-
-        name, _ = spliterate(parts=name.split(), ready_if=is_short_enough)
-
-        # TODO return ToString(name).truncate(max_len)?
-        return name if is_short_enough(name) else name[:max_len]
-
-    @classmethod
-    def shorten_name(cls, entire_name: str, max_len: int = 30) -> str:
-        is_short_enough = cls.make_name_len_checker(max_len)
-        name = entire_name
-        if not is_short_enough(name):
-            parts = [x for x in cls.REGX.BOUND.split(name.strip())]
-            name, title_found = spliterate(
-                parts=parts, ready_if=is_short_enough, pop_ix=0,
-                get_target=cls.REGX.TITLE.search)
-            title_noun = title_found.groups()[0] if title_found else None
-            item = None
-            with ReadyChecker(to_check=name, iter_over=cls.REGX,
-                              ready_if=is_short_enough) as check:
-                while check.is_not_ready():
-                    prev = item
-                    item = next(check).sub("", check.to_check)
-                    check(item if item and (not title_noun or title_noun in
-                                            item) else prev)
-
-            for shortenings in cls.ABBR.values():
-                name = cls.check_name(to_check=name, iter_over=shortenings,
-                                      ready_if=is_short_enough)
-
-            words = name.split()
-            title_noun_pos = words.index(title_noun) + 1 if title_noun else 1
-            name, _ = spliterate(parts=words, ready_if=is_short_enough,
-                                 min_len=title_noun_pos)
-            name, _ = spliterate(parts=name.split(), ready_if=is_short_enough,
-                                 pop_ix=0)
-            name = cls.REGX.normalize(name).strip()
-            name = name.removesuffix("s").removesuffix(".")
-        return name if is_short_enough(name) else \
-            name[:name.rfind(" ", len(name) - max_len) + 1]
-
-    @staticmethod
-    def check_name(to_check: str, iter_over: Iterable[tuple[str, str]],
-                   ready_if: Callable[[str], bool]) -> str:
-        with ReadyChecker(to_check, iter_over, ready_if) as check:
-            while check.is_not_ready():
-                pair = next(check)
-                check(str.replace(check.to_check, *pair).strip())
-        return check.to_check

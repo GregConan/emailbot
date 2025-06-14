@@ -4,10 +4,10 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-06-07
+Updated: 2025-06-13
 """
 # Import standard libraries
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 import datetime as dt
 import email
 from email.message import EmailMessage
@@ -23,27 +23,11 @@ from typing import Any
 from gconanpy.debug import Debuggable
 from gconanpy.dissectors import Corer
 from gconanpy.IO.local import LoadedTemplate
+from gconanpy.metafunc import BytesOrStr
 from gconanpy.ToString import stringify
 
 
 # NOTE: Very much a work in progress.
-
-
-class BytesOrStrMeta(type):  # TODO Move to gconanpy.metafunc?
-    _Checker = Callable[[Any, type | tuple[type, ...]], bool]
-
-    def _check(cls, thing: Any, check: _Checker) -> bool:
-        return check(thing, (bytes, str))
-
-    def __instancecheck__(cls, instance: Any) -> bool:
-        return cls._check(instance, isinstance)
-
-    def __subclasscheck__(cls, subclass: Any) -> bool:
-        return cls._check(subclass, issubclass)
-
-
-class BytesOrStr(metaclass=BytesOrStrMeta):  # TODO Move to gconanpy.metafunc?
-    """ Any instance of bytes or str is a BytesOrStr instance. """
 
 
 class ReplyTo(EmailMessage, Debuggable):
@@ -278,7 +262,8 @@ class Gmailer(Debuggable):
     def search(self, *filters: str) -> BytesOrStr:
         """ Search the contents of a Gmail account.
 
-        :return: Any, _description_
+        :param filters: Iterable[str], _description_
+        :return: bytes | str, _description_
         """
         return Corer(debugging=self.debugging).safe_core(
             self.con.search(None, *filters), as_type=BytesOrStr)
