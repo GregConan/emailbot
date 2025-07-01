@@ -4,7 +4,7 @@
 Class to update a Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-11
-Updated: 2025-06-10
+Updated: 2025-07-01
 """
 # Import standard libraries
 from collections.abc import Iterable
@@ -33,7 +33,7 @@ from gconanpy.mapping import map_funcs
 from gconanpy.mapping.dicts import DotDict, LazyDotDict
 from gconanpy.find import ReadyChecker
 from gconanpy.IO.local import save_to_json
-from gconanpy.metafunc import DATA_ERRORS
+from gconanpy.meta.classes import DATA_ERRORS
 from gconanpy.ToString import stringify_iter
 
 # Import local custom libraries
@@ -335,6 +335,8 @@ class JobsAppsSheetUpdater(GoogleSheet):
         ):
             if ignore_if_subject_contains in unread_job_email["Subject"]:
                 ignored[msg_ID] = unread_job_email
+                pdb.set_trace()  # TODO REMOVE LINE
+                pass             # TODO REMOVE LINE
             else:
                 try:
                     job = LinkedInJobFromMsg(unread_job_email,

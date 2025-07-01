@@ -4,7 +4,7 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-06-13
+Updated: 2025-07-01
 """
 # Import standard libraries
 from collections.abc import Iterable, Mapping
@@ -23,7 +23,7 @@ from typing import Any
 from gconanpy.debug import Debuggable
 from gconanpy.dissectors import Corer
 from gconanpy.IO.local import LoadedTemplate
-from gconanpy.metafunc import BytesOrStr
+from gconanpy.meta.classes import BytesOrStr
 from gconanpy.ToString import stringify
 
 
