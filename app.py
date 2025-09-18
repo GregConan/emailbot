@@ -4,10 +4,9 @@
 Gmail Bot
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-23
-Updated: 2025-06-10
+Updated: 2025-07-29
 """
 # Import standard libraries
-import argparse
 from configparser import ConfigParser
 from getpass import getpass
 from glob import glob
@@ -16,7 +15,7 @@ import pdb
 import sys
 
 # Import remote custom libraries
-from gconanpy.cli import add_new_out_dir_arg_to, Valid
+from gconanpy.wrappers import ArgParser, Valid
 from gconanpy.debug import ShowTimeTaken
 from gconanpy.dissectors import Xray
 from gconanpy.mapping.dicts import LazyDotDict, SubCryptionary
@@ -72,8 +71,7 @@ def main():
                 print("done")
 
 
-def get_cli_args(parser: argparse.ArgumentParser | None = None
-                 ) -> LazyDotDict:
+def get_cli_args(parser: ArgParser | None = None) -> LazyDotDict:
     """
     :param parser: argparse.ArgumentParser to get command-line input arguments
     :return: LazyDotDict[str, Any], all arguments collected from the command line
@@ -85,8 +83,8 @@ def get_cli_args(parser: argparse.ArgumentParser | None = None
 
     # Collect command-line input arguments
     if not parser:
-        parser = argparse.ArgumentParser("Python script(s) to interact with "
-                                         "Gmail, Google Sheets and LinkedIn.")
+        parser = ArgParser("Python script(s) to interact with "
+                           "Gmail, Google Sheets and LinkedIn.")
     parser.add_argument(
         "run_mode",  # "-m", "-mode", "--run-mode",
         choices=RUN_MODES,
@@ -118,8 +116,8 @@ def get_cli_args(parser: argparse.ArgumentParser | None = None
         metavar="EMAIL_ADDRESS",
         help=MSG_CRED.format("address")
     )
-    parser = add_new_out_dir_arg_to(parser, "out", dest="output",
-                                    metavar="OUTPUT_DIRECTORY")
+    parser.add_new_out_dir_arg("out", dest="output",
+                               metavar="OUTPUT_DIRECTORY")
     parser.add_argument(
         "-n", "--number", "--count", "--n-emails", "--how-many",
         dest="how_many",
@@ -150,7 +148,7 @@ def get_credentials(cli_args: LazyDotDict, config: LazyDotDict,
     try:
         cli_args.setdefaults(**config.get_subset_from_lookups(config_paths),
                              exclude={None})
-        creds = SubCryptionary.from_subset_of(
+        creds = SubCryptionary.from_subset_of(  # TODO use Locktionary?
             cli_args, keys=("address", "debugging", "password"),
             include_keys=True, values={None}, include_values=False)
 

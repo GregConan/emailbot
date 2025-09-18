@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "emailbot"
-version = "0.4.1"
+version = "0.5.0"
 description = ""
 authors = ["Greg Conan <gregmconan@gmail.com>"]
 readme = "README.md"
@@ -17,8 +17,9 @@ google-api-python-client = "^2.163.0"
 google-auth-httplib2 = "^0.2.0"
 google-auth-oauthlib = "^1.2.1"
 gspread = "^6.2.0"
-gconanpy = {git = "https://github.com/GregConan/gconanpy.git", rev = "v0.7.1"}
+gconanpy = {git = "https://github.com/GregConan/gconanpy.git", rev = "v0.18.1"}
 dask = {extras = ["dataframe"], version = "^2025.3.0"}
+xmltodict = "^0.14.2"
 
 
 [build-system]

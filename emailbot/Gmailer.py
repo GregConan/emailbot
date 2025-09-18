@@ -4,7 +4,7 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-07-01
+Updated: 2025-09-15
 """
 # Import standard libraries
 from collections.abc import Iterable, Mapping
@@ -19,12 +19,15 @@ import pdb
 import re
 from typing import Any
 
+# Import third-party PyPI libraries
+from bs4 import BeautifulSoup
+
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
 from gconanpy.dissectors import Corer
 from gconanpy.IO.local import LoadedTemplate
-from gconanpy.meta.classes import BytesOrStr
-from gconanpy.ToString import stringify
+from gconanpy.meta.typeshed import BytesOrStr
+from gconanpy.wrappers import stringify
 
 
 # NOTE: Very much a work in progress.
@@ -36,8 +39,8 @@ class ReplyTo(EmailMessage, Debuggable):
                  debugging: bool = False, policy: Policy | None = None,
                  **template_fields: Any) -> None:
         try:
-            super().__init__(policy=policy)
-            self.debugging = debugging
+            EmailMessage.__init__(self, policy)
+            Debuggable.__init__(self, debugging)
             self.template = template
 
             self.msg = msg
@@ -90,7 +93,7 @@ class Gmailer(Debuggable):
         :param imap_URL: str, host URL to connect to using IMAP4 client. \
                          Defaults to "imap.gmail.com"
         """
-        self.debugging = debugging
+        Debuggable.__init__(self, debugging)
 
         # IMAP4 client SSL connection with GMAIL
         self.con = imaplib.IMAP4_SSL(imap_URL)
@@ -105,7 +108,7 @@ class Gmailer(Debuggable):
     # TODO Add functionality to restore connection on abort
 
     def draft_reply_to(self, msg: EmailMessage, template_name: str,
-                       save_to: str = '[Gmail]/Drafts') -> ReplyTo:
+                       save_to: str = "[Gmail]/Drafts") -> ReplyTo:
         reply = ReplyTo(msg, debugging=self.debugging,
                         template=self.templates[template_name],
                         my_address=self.address)
@@ -130,6 +133,28 @@ class Gmailer(Debuggable):
         except (AttributeError, TypeError) as err:
             self.debug_or_raise(err, locals())
         return msg
+
+    @staticmethod
+    def get_body_of(msg: EmailMessage) -> BeautifulSoup:
+        """ 
+        :param msg: EmailMessage
+        :return: bs4.BeautifulSoup, the body of the email `msg`.
+        """
+        # Convert EmailMessage to valid HTML body string
+        msgstr = msg.as_string().replace("\r", "")
+        despaced = msgstr.replace("=\n", "").replace("=3D", "=")
+        start_ix = despaced.find("<body")
+        end_ix = despaced.rfind("</body>") + 7  # +len("</body>")
+        bodystr = despaced[start_ix:end_ix]
+
+        # Convert HTML body string to BeautifulSoup to parse msg contents
+        body = BeautifulSoup(bodystr, features="html.parser")
+
+        # Filter out more useless whitespace from the message
+        for blank_str in body.find_all(string=" "):
+            blank_str.extract()  # Remove from BeautifulSoup XML element tree
+
+        return body
 
     def get_emails_from(self, address: str | None = None,
                         folder: str = "Inbox", how_many: int | None = None,

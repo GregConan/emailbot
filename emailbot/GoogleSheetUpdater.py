@@ -4,7 +4,7 @@
 Class to update a Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-11
-Updated: 2025-07-01
+Updated: 2025-09-17
 """
 # Import standard libraries
 from collections.abc import Iterable
@@ -12,10 +12,11 @@ import datetime as dt
 from email.message import EmailMessage
 import os
 import pdb
-from typing import Any
+from typing import Any, cast
 from typing_extensions import Self
 
 # Import third-party PyPI libraries
+import bs4
 # import dask.dataframe as dd
 from google.auth.transport.requests import Request
 from google.oauth2.service_account import Credentials as OauthServiceCreds
@@ -29,20 +30,21 @@ import pandas as pd  # TODO Switch to gspread_pandas or Dask?
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
-from gconanpy.mapping import map_funcs
-from gconanpy.mapping.dicts import DotDict, LazyDotDict
-from gconanpy.find import ReadyChecker
 from gconanpy.IO.local import save_to_json
-from gconanpy.meta.classes import DATA_ERRORS
-from gconanpy.ToString import stringify_iter
+from gconanpy.mapping import chain_get
+from gconanpy.mapping.dicts import DotDict, LazyDotDict
+from gconanpy.meta.typeshed import DATA_ERRORS
+from gconanpy.wrappers import stringify_iter
 
 # Import local custom libraries
 try:
     from Gmailer import Gmailer
-    from LinkedInJob import LinkedInJob, LinkedInJobFromMsg
+    from LinkedInJob import \
+        LinkedInEmail, LinkedInJob, LinkedInJobFromMsg, try_filter_df
 except ModuleNotFoundError:
     from emailbot.Gmailer import Gmailer
-    from emailbot.LinkedInJob import LinkedInJob, LinkedInJobFromMsg
+    from emailbot.LinkedInJob import \
+        LinkedInEmail, LinkedInJob, LinkedInJobFromMsg, try_filter_df
 
 
 class GCPAuth(Debuggable):
@@ -63,7 +65,7 @@ class GCPAuth(Debuggable):
         :param scopes: Iterable[str] of GCP authorization scope names; \
             defaults to ("spreadsheets", "drive")
         """
-        self.debugging = debugging
+        Debuggable.__init__(self, debugging)
         self.scopes = self.get_scopes(*scopes)
 
     @classmethod
@@ -177,8 +179,8 @@ class GoogleSheet(LazyDotDict, Debuggable):
             False to raise errors/exceptions; defaults to False.
         """
         try:
-            super().__init__()
-            self.debugging = debugging
+            Debuggable.__init__(self, debugging)
+            LazyDotDict.__init__(self)
             self.client = gspread.authorize(creds)
             self.online_sheets = self.client.open_by_key(sheet_ID)
             self.online_sheet = self.online_sheets.worksheet(worksheet_name)
@@ -186,14 +188,18 @@ class GoogleSheet(LazyDotDict, Debuggable):
             self.debug_or_raise(err, locals())
 
     def get_df(self, *args, **kwargs) -> pd.DataFrame:
-        return self.lazysetdefault("df", self.to_df, args, kwargs,
-                                   exclude={None})
+        try:
+            df = self.lazysetdefault("df", self.make_df, args, kwargs,
+                                     exclude={None})
+        except TypeError as err:
+            self.debug_or_raise(err, locals())
+        return df
 
-    def to_df(self, *args, **kwargs) -> pd.DataFrame:
+    def make_df(self, *args, **kwargs) -> pd.DataFrame:
         try:
             df = pd.DataFrame(self.lazysetdefault(
-                "sheet", self.online_sheet.get_all_records, args, kwargs,
-                exclude={None}))
+                "sheet", self.online_sheet.get_all_records,
+                args, kwargs, exclude={None}))
         except (gspread.exceptions.GSpreadException, TypeError, ValueError
                 ) as err:
             self.debug_or_raise(err, locals())
@@ -207,7 +213,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
                  "App Status": "status",
                  "Where": "src",
                  "Contact(s)": "contact"}
-    IGNORABLE = "you have new application updates this week"
+    MULTIPLE = "you have new application updates this week"
 
     def __init__(self, sheet_ID: str, worksheet_name: str,
                  jobs_email: str | None = None, relabel: str | None = None,
@@ -231,7 +237,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
         """
 
         # (GOOGLE_SERVICE_JSON, GOOGLE_SHEET_ID, GOOGLE_TOKEN_JSON, WORKSHEET_NAME)
-        self.debugging = debugging
+        Debuggable.__init__(self, debugging)
         self.jobs_email = jobs_email
         self.relabel = relabel
 
@@ -244,7 +250,8 @@ class JobsAppsSheetUpdater(GoogleSheet):
                 credsJSON="credentials.json",
                 serviceJSON=serviceJSON, tokenJSON=tokenJSON  # TODO
             )
-            super().__init__(sheet_ID, worksheet_name, creds, debugging)
+            GoogleSheet.__init__(self, sheet_ID, worksheet_name,
+                                 creds, debugging)
         except (HttpError, ValueError) as err:
             self.debug_or_raise(err, locals())
 
@@ -264,9 +271,9 @@ class JobsAppsSheetUpdater(GoogleSheet):
         return cls(**config.get_subset_from_lookups(config_vars, sep, default),
                    debugging=debugging)
 
-    def to_df(self) -> pd.DataFrame:
+    def make_df(self) -> pd.DataFrame:
         try:
-            df = super(JobsAppsSheetUpdater, self).to_df(
+            df = super(JobsAppsSheetUpdater, self).make_df(
                 expected_headers=self.COL_NAMES.keys()
             ).rename(columns=self.COL_NAMES)
         except (gspread.exceptions.GSpreadException, TypeError, ValueError
@@ -275,12 +282,19 @@ class JobsAppsSheetUpdater(GoogleSheet):
         return df
 
     def find_row_of_job(self, job: LinkedInJob) -> int:
-        with ReadyChecker(self.get_df(), ("company", "name", "date"),
-                          lambda a_df: len(a_df.index) == 1) as check:
-            while check.is_not_ready():
-                check.to_check = job.filter_df_by_detail(
-                    check.to_check, next(check))
-            df = check.to_check
+        details = dict()
+        for detail_name in ("company", "name", "date"):
+
+            detail = job.get(detail_name, None, {None})
+            if detail is not None:
+                details[detail_name] = [job[detail_name], ]
+
+                short_name = f"short_{detail}"
+                shortened = job.get(short_name, None, {None})
+                if shortened is not None:
+                    cast(list, details[detail_name]).append(shortened)
+
+        df = try_filter_df(self.get_df(), details)
 
         if len(df.index) > 1:
             dates: pd.Series = self.lazysetdefault(
@@ -293,15 +307,14 @@ class JobsAppsSheetUpdater(GoogleSheet):
         if len(df.index) != 1:
             self.debug_or_raise(ValueError("Job not found in df"), locals())
 
-        return df.index.item()
+        return cast(pd.DataFrame, df).index.item()
 
-    def update_status_of(self, job: LinkedInJobFromMsg, new_status: str
+    def update_status_of(self, job_row: int, new_status: str
                          ) -> None:
-        job_row = self.find_row_of_job(job)
         if self.df.loc[job_row, "status"] != "Rejected":
             self.df.loc[job_row, "status"] = new_status  # TODO Unneeded?
-            cell_to_update = gspread.utils.rowcol_to_a1(job_row + 2,
-                                                        job.cols["status"])
+            cell_to_update = gspread.utils.rowcol_to_a1(
+                job_row + 2, LinkedInJob.COLS["status"])
             self.updates.append({"range": cell_to_update,
                                  "values": [[new_status]]})
 
@@ -320,8 +333,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
         return resp
 
     def sort_job_apps_from_gmail(
-            self, gmail: Gmailer, how_many: int | None = None,
-            ignore_if_subject_contains: str = IGNORABLE) -> None:
+            self, gmail: Gmailer, how_many: int | None = None) -> None:
         """ _summary_
 
         :param gmail: Gmailer, _description_
@@ -333,35 +345,43 @@ class JobsAppsSheetUpdater(GoogleSheet):
         for unread_job_email, msg_ID in gmail.get_emails_from(
             address=self.jobs_email, how_many=how_many, unread_only=True
         ):
-            if ignore_if_subject_contains in unread_job_email["Subject"]:
-                ignored[msg_ID] = unread_job_email
-                pdb.set_trace()  # TODO REMOVE LINE
-                pass             # TODO REMOVE LINE
-            else:
-                try:
-                    job = LinkedInJobFromMsg(unread_job_email,
-                                             debugging=self.debugging)
+            try:
+                body = gmail.get_body_of(unread_job_email)
+                if self.MULTIPLE in unread_job_email["Subject"]:
+                    try:
+                        msg = LinkedInEmail(unread_job_email, body,
+                                            self.get_df(), self.debugging)
+                        for job_row, new_status in msg.get_updates():
+                            self.update_status_of(job_row, new_status)
+                        job_updates[msg_ID] = unread_job_email
+                    except DATA_ERRORS as err:
+                        self.debug_or_raise(err, locals())
+                        ignored[msg_ID] = unread_job_email
+                else:
+                    job = LinkedInJobFromMsg(unread_job_email["Subject"],
+                                             unread_job_email["Date"],
+                                             body, debugging=self.debugging)
                     job_app_was = job.get("verb", False)
                     match job_app_was:
                         case "sent" | "applied":
                             self.new_rows.append(job.toGoogleSheetsRow())
                             job_updates[msg_ID] = unread_job_email
                         case "rejected" | "viewed":
-                            self.update_status_of(job,
+                            self.update_status_of(self.find_row_of_job(job),
                                                   job_app_was.capitalize())
                             job_updates[msg_ID] = unread_job_email
                         case _:  # TODO
                             skipped[msg_ID] = unread_job_email
-                except DATA_ERRORS as err:
-                    skipped[msg_ID] = unread_job_email
-                    self.debug_or_raise(err, locals())
+            except DATA_ERRORS as err:
+                skipped[msg_ID] = unread_job_email
+                self.debug_or_raise(err, locals())
 
         if job_updates:
             resp = None
             try:
                 resp = self.send_updates()
                 self.print_summary("Updated job apps sheet from", job_updates)
-                n_updates = map_funcs.chain_get(resp["updates"], (
+                n_updates = chain_get(resp["updates"], (
                     "updatedRows", "totalUpdatedRows"), 0)
                 if n_updates != len(self.updates):
                     raise ValueError("Incorrect number of updated rows.")
@@ -374,6 +394,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
 
         if ignored:
             self.print_summary("Ignored", ignored)
+            gmail.mark_unread([ignored_msg_ID for ignored_msg_ID in ignored])
 
         if skipped:
             gmail.mark_unread([skipped_msg_ID for skipped_msg_ID in skipped])
