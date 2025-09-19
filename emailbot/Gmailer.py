@@ -4,7 +4,7 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-09-15
+Updated: 2025-09-18
 """
 # Import standard libraries
 from collections.abc import Iterable, Mapping
@@ -24,7 +24,7 @@ from bs4 import BeautifulSoup
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
-from gconanpy.dissectors import Corer
+from gconanpy.access.dissectors import Corer
 from gconanpy.IO.local import LoadedTemplate
 from gconanpy.meta.typeshed import BytesOrStr
 from gconanpy.wrappers import stringify

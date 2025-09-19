@@ -4,7 +4,7 @@
 Gmail Bot
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-23
-Updated: 2025-07-29
+Updated: 2025-09-18
 """
 # Import standard libraries
 from configparser import ConfigParser
@@ -17,7 +17,7 @@ import sys
 # Import remote custom libraries
 from gconanpy.wrappers import ArgParser, Valid
 from gconanpy.debug import ShowTimeTaken
-from gconanpy.dissectors import Xray
+from gconanpy.access.dissectors import Xray
 from gconanpy.mapping.dicts import LazyDotDict, SubCryptionary
 
 # Import local custom libraries
@@ -149,8 +149,8 @@ def get_credentials(cli_args: LazyDotDict, config: LazyDotDict,
         cli_args.setdefaults(**config.get_subset_from_lookups(config_paths),
                              exclude={None})
         creds = SubCryptionary.from_subset_of(  # TODO use Locktionary?
-            cli_args, keys=("address", "debugging", "password"),
-            include_keys=True, values={None}, include_values=False)
+            cli_args, keys_are=("address", "debugging", "password"),
+            values_arent=None)
 
         # Prompt user for Gmail credentials if they didn't provide them as
         # command-line arguments

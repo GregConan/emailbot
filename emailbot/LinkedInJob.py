@@ -5,7 +5,7 @@ Class to insert a row with LinkedIn job application details into a \
     Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-16
-Updated: 2025-09-17
+Updated: 2025-09-18
 """
 # Import standard libraries
 from collections.abc import Generator, Mapping, Sequence
@@ -24,8 +24,8 @@ from gconanpy.debug import Debuggable
 from gconanpy.mapping.dicts import FancyDict
 from gconanpy.meta import tuplify, varsof
 from gconanpy.meta.typeshed import DATA_ERRORS
-from gconanpy.dissectors import Shredder
-from gconanpy.iters.find import Spliterator
+from gconanpy.access.dissectors import Shredder
+from gconanpy.access.find import Spliterator
 from gconanpy.IO.web import URL
 from gconanpy.reg import Abbreviations, Regextract
 from gconanpy.wrappers import ToString
