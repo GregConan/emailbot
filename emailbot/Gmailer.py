@@ -4,7 +4,7 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2025-09-18
+Updated: 2026-03-05
 """
 # Import standard libraries
 from collections.abc import Iterable, Mapping
@@ -24,10 +24,14 @@ from bs4 import BeautifulSoup
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
-from gconanpy.access.dissectors import Corer
+from gconanpy.access.nested import Corer
 from gconanpy.IO.local import LoadedTemplate
 from gconanpy.meta.typeshed import BytesOrStr
-from gconanpy.wrappers import stringify
+from gconanpy.strings import stringify
+
+
+# Type hints
+_Emails = list[tuple[EmailMessage, bytes | str]]
 
 
 # NOTE: Very much a work in progress.
@@ -103,7 +107,7 @@ class Gmailer(Debuggable):
         self.logout = self.con.logout
 
         # Email templates
-        self.templates = dict()
+        self.templates = {}
 
     # TODO Add functionality to restore connection on abort
 
@@ -159,10 +163,10 @@ class Gmailer(Debuggable):
     def get_emails_from(self, address: str | None = None,
                         folder: str = "Inbox", how_many: int | None = None,
                         subject_part: str | None = None,
-                        search_keywords: dict[str, Any] = dict(),
+                        search_keywords: dict[str, Any] = {},
                         unread_only: bool = False
-                        # search_terms: Iterable[str] = list()
-                        ) -> list[tuple[EmailMessage, bytes | str]]:
+                        # search_terms: Iterable[str] = []
+                        ) -> _Emails:
         """ Get most recent {how_many} emails 
 
         :param folder: str, folder/box to get emails from, defaults to "Inbox"
@@ -170,7 +174,7 @@ class Gmailer(Debuggable):
         :return: List[EmailMessage], _description_
         """
         self.con.select(folder)
-        result: list[tuple[EmailMessage, bytes | str]] = list()
+        result: _Emails = []
 
         # Build search query
         if address:
@@ -186,15 +190,15 @@ class Gmailer(Debuggable):
 
             # If search came up empty, return an empty list
             if searched == "OK":
-                result = list()
+                result = []
             else:
 
-                # Otherwise, fetch and return the searched-for messages
+                # Otherwise, fetch and return the searched-for messages,
+                # starting with the OLDEST
                 email_IDs = searched.split()
                 if how_many is not None and how_many < len(email_IDs):
-                    email_IDs = email_IDs[-how_many:]
-                result = [(self.fetch(msg_ID), msg_ID)
-                          for msg_ID in reversed(email_IDs)]
+                    email_IDs = email_IDs[:how_many]
+                result = [(self.fetch(msg_ID), msg_ID) for msg_ID in email_IDs]
             if not result and self.debugging:
                 print("No emails found.")
                 pdb.set_trace()

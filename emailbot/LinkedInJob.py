@@ -5,69 +5,34 @@ Class to insert a row with LinkedIn job application details into a \
     Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-16
-Updated: 2025-09-18
+Updated: 2026-03-05
 """
 # Import standard libraries
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Generator, Iterable, Sequence
 import datetime as dt
 from email.message import EmailMessage
 import pdb
 import re
-from typing import cast, NamedTuple
+from typing import Any, cast
 
 # Import third-party PyPI libraries
 import bs4
-from pandas import DataFrame
+import pandas as pd  # TODO remove line; just import DataFrame?
+# from pandas import DataFrame
 
 # Import remote custom libraries
-from gconanpy.debug import Debuggable
-from gconanpy.mapping.dicts import FancyDict
-from gconanpy.meta import tuplify, varsof
-from gconanpy.meta.typeshed import DATA_ERRORS
-from gconanpy.access.dissectors import Shredder
+from gconanpy.access.attributes import varsof
+from gconanpy.access.nested import Shredder
 from gconanpy.access.find import Spliterator
+from gconanpy.debug import Debuggable
 from gconanpy.IO.web import URL
+from gconanpy.numpandas import try_filter_df
+from gconanpy.mapping.attrmap import AttrMap
+from gconanpy.mapping.dicts import FancyDict
+from gconanpy.meta import cached_property, name_of
+from gconanpy.meta.typeshed import DATA_ERRORS
 from gconanpy.reg import Abbreviations, Regextract
-from gconanpy.wrappers import ToString
-
-
-def try_filter_df(df: DataFrame, filters: Mapping) -> DataFrame:
-    """
-    :param col_name: Hashable, name of the column to filter by
-    :param acceptable_values: Iterable[Any], values that must appear in \
-        the `col_name` column of every row of the returned `DataFrame`, \
-        if any such rows exist in this `DataFrame`.
-    :return: Self, filtered to only include row(s) with a `col_name` \
-        value in `acceptable_values`, if any; else `Self` unchanged.
-    """
-    new_df = prev_df = df
-    for col_name, acceptable_values in filters.items():
-        # not match len(new_df.index) because that'd need a double `break`?
-        n_rows = len(new_df.index)
-        if n_rows == 1:
-            return new_df
-        elif n_rows == 0:
-            '''
-            raise ValueError("Value not found in DataFrame")
-            if len(prev_df.index) == 0:
-                pdb.set_trace()
-                pass
-            '''
-            new_df = prev_df
-        else:
-            prev_df = new_df
-            new_df = cast(DataFrame, new_df.loc[new_df[col_name].isin(
-                tuplify(acceptable_values))
-            ])
-    if len(new_df.index) > 1:
-        for col_name, acceptable_values in filters.items():
-            for val in acceptable_values:
-                new_df = cast(DataFrame, new_df.loc[
-                    new_df[col_name].str.contains(val)])
-                if len(new_df.index) == 1:
-                    return new_df
-
-    return new_df if len(new_df.index) > 0 else df
+from gconanpy.strings import FancyString
 
 
 class LinkedInJobNameRegex(list[re.Pattern]):
@@ -140,10 +105,13 @@ class LinkedInJobNameRegex(list[re.Pattern]):
         return name
 
 
+ABBR = AttrMap[Abbreviations]()
+ABBR.COMPANY = Abbreviations(Technology="Tech", Solution="Soln")
+ABBR.JOB = Abbreviations(Senior="Sr", Junior="Jr", Experience="Exp",
+                         **{"with": "w/"})
+
+
 class LinkedInJobDetailParser(LinkedInJobNameRegex):
-    class ABBR(NamedTuple):
-        COMPANY = Abbreviations(Technology="Tech", Solution="Soln")
-        JOB = Abbreviations(Senior="Sr", Junior="Jr")
     APP_DATE_PREFIX = "Applied on "
     APP_DATE_FORMATS = ("%B %d, %Y", "%b %d", "%b %d, %Y", "%B %d")
     MSG_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S %z (%Z)"
@@ -197,9 +165,9 @@ class LinkedInJobDetailParser(LinkedInJobNameRegex):
         """
         for removable in cls.UNNEEDED:
             name = name.replace(removable, " ").strip()
-        name = cls.ABBR.COMPANY.abbreviate(name, max_len)
+        name = ABBR.COMPANY.abbreviate(name, max_len)
         name, _ = Spliterator(max_len=max_len).spliterate(name.split())
-        return ToString(name).truncate(max_len, suffix="")
+        return FancyString(cls.normalize(name)).truncate(max_len, suffix="")
 
     def shorten_name(self, name: str, max_len: int = 30) -> str:
         """ Trim, truncate, rearrange, and abbreviate the name of a LinkedIn \
@@ -218,7 +186,7 @@ class LinkedInJobDetailParser(LinkedInJobNameRegex):
                 parts, pop_ix=0, get_target=self.TITLE.search)
             title_noun = title_found.groups()[0] if title_found else ""
             name = self.remove_from(name, max_len, but_keep=title_noun)
-            name = self.ABBR.JOB.abbreviate(name, max_len)
+            name = ABBR.JOB.abbreviate(name, max_len)
             words = name.split()
             title_noun_pos = words.index(title_noun) + 1 if title_noun else 1
             name, _ = splitter.spliterate(words, min_parts=title_noun_pos)
@@ -234,14 +202,22 @@ REGX = LinkedInJobDetailParser()
 
 
 class DetailBox(FancyDict, Debuggable):
+    def __init__(self, *, debugging: bool = True, **kwargs) -> None:
+        Debuggable.__init__(self, debugging)
+        FancyDict.__init__(self, **kwargs)
 
     def __eq__(self, other) -> bool:
         return varsof(self) == varsof(other)
 
+    def __repr__(self) -> str:
+        return name_of(self) + FancyString.fromMapping(
+            self, prefix="(", suffix=")", join_on="=", quote_keys=False,
+            lastly="", iter_kwargs=dict[str, Any](max_len=100))
+
 
 class LinkedInJob(DetailBox):
 
-    COLS: dict[str, int] = dict(
+    COLS = dict[str, int](
         date=1, company=2, name=3, url=3, status=4, src=5, contact=6)
 
     DEFAULT_STATUS: str = \
@@ -252,7 +228,8 @@ class LinkedInJob(DetailBox):
     contact = "N/A"
 
     def __init__(self, date: str, company: str, short_company: str,
-                 name: str, short_name: str, url: str, debugging: bool = False) -> None:
+                 name: str, short_name: str, url: str, debugging: bool = False
+                 ) -> None:
         Debuggable.__init__(self, debugging)
         FancyDict.__init__(self)
 
@@ -265,14 +242,8 @@ class LinkedInJob(DetailBox):
         self.short_name = short_name
         self.url = url
 
-    def filter_df_by_detail(self, df: DataFrame, detail: str) -> DataFrame:
-        shortname = f"short_{detail}"
-        details = {self[detail]}
-        if shortname in self:
-            details.add(self[shortname])
-        return try_filter_df(df, {detail: details})
-
-    def toGoogleSheetsRow(self) -> list[str]:
+    @cached_property[list[str]]
+    def asGoogleSheetsRow(self) -> list[str]:
         """
         :return: list[str] of values to insert into a Google Sheet row: \
             [date, company, hyperlink(name->url), status, src, contact]
@@ -281,7 +252,7 @@ class LinkedInJob(DetailBox):
             row = [self.date, self.short_company,
                    f'=HYPERLINK("{self.url}","{self.short_name}")',
                    self.DEFAULT_STATUS, self.src, self.contact
-                   ] if self else list()
+                   ] if self else []
         except DATA_ERRORS as err:
             self.debug_or_raise(err, locals())
         return row
@@ -292,7 +263,7 @@ class LinkedInEmail(DetailBox):
     DATE_FORMAT = "%a, %d %b %Y %H:%M:%S %z (%Z)"
 
     def __init__(self, msg: EmailMessage, body: bs4.BeautifulSoup,
-                 df: DataFrame, debugging: bool = False) -> None:
+                 df: pd.DataFrame, debugging: bool = False) -> None:
         Debuggable.__init__(self, debugging)
         self.body = body
         self.df = df
@@ -301,7 +272,7 @@ class LinkedInEmail(DetailBox):
 
     def get_updates(self) -> Generator[_UPDATE, None, None]:
         for joblink in self.body.find_all("a"):
-            attrs: dict = getattr(joblink, "attrs", dict())
+            attrs: dict = getattr(joblink, "attrs", {})
             url: str = attrs.get("href", "")
             if "/jobs/view/" in url:
                 try:
@@ -357,7 +328,7 @@ class LinkedInEmail(DetailBox):
         return job_row
 
 
-class LinkedInJobFromMsg(LinkedInJob, Debuggable):
+class LinkedInJobFromMsg(LinkedInJob):
     MSG_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S %z (%Z)"
     URL_PREFIX = "https://www.linkedin.com/jobs/view/"
 
@@ -382,16 +353,10 @@ class LinkedInJobFromMsg(LinkedInJob, Debuggable):
 
         # Find the job application submission date in the email body
         self.body = msg_body  # self.get_body_of(msg)
-        self.shredded = Shredder(debugging=self.debugging).shred(self.body)
-
-        for part in self.shredded:
-            try:
-                app_date = REGX.parse_date_from(part, self.msg_date)
-                if app_date is not None:
-                    self.date = self.correct_date(app_date)
-                    break
-            except (AssertionError, TypeError, ValueError):
-                pass
+        self.date = self.find_date_in(msg_body.strings)
+        if self.date is None:
+            self.shredded = Shredder(debugging=self.debugging).shred(self.body)
+            self.date = self.find_date_in(self.shredded)
 
         # Find the job name, posting URL, & job status/verb in the email body
         self.found_name = False
@@ -410,20 +375,24 @@ class LinkedInJobFromMsg(LinkedInJob, Debuggable):
         else:  # Abbreviate the job name
             self.short_name = REGX.shorten_name(self.name)
 
-    def correct_date(self, job_app_date: dt.date) -> str:
-        """ Correct the parsed job application date if it has issues
-
-        :param job_app_date: dt.date, the date a LinkedIn job application \
-            was submitted; verify/correct this
-        :return: str, corrected and ISO-formatted `job_app_date`
-        """
-        today = dt.date.today()
-        if job_app_date.year == 1900:  # => no year in msg; correct that
-            job_app_date = job_app_date.replace(
-                year=self.get("msg_date", today).year)
-        if (job_app_date - today).days > 0:  # No job apps dated in future
-            job_app_date = today
-        return job_app_date.isoformat()  # to string: YYYY-MM-DD
+    def find_date_in(self, parts: Iterable) -> str | None:
+        for part in parts:
+            try:
+                stripped = cast(str, part).strip()
+                app_date = REGX.parse_date_from(stripped, self.msg_date)
+                if app_date is not None:
+                    today = dt.date.today()
+                    if app_date.year < 2000:  # => no year in msg; correct that
+                        app_date = app_date.replace(
+                            year=self.get("msg_date", today).year)
+                    if (app_date - today).days > 0:  # No job apps from future
+                        app_date = today
+                    return app_date.isoformat()  # to string: YYYY-MM-DD
+            except (AssertionError, AttributeError, TypeError, ValueError):
+                pass
+        if self.debugging:  # TODO Remove block?
+            pdb.set_trace()
+            pass
 
     def get_details_from_link(self, url: str, text: str) -> None:
         """ Given the text and URL of a hyperlink parsed from a web object, \
@@ -435,7 +404,7 @@ class LinkedInJobFromMsg(LinkedInJob, Debuggable):
         # If this is a LinkedIn job posting URL, then get details from it
         if "/jobs/view/" in url:
             if not self.get("url", None):  # Save job posting base URL
-                self.url = URL(url).without_params()
+                self.url = URL(url).without_params
 
             if text:  # If the link has text, use it to get the job name
                 if not self.get("name", None):

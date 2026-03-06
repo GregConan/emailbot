@@ -4,10 +4,10 @@
 Class to update a Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-11
-Updated: 2025-09-17
+Updated: 2026-03-05
 """
 # Import standard libraries
-from collections.abc import Iterable
+from collections.abc import Hashable, Iterable
 import datetime as dt
 from email.message import EmailMessage
 import os
@@ -33,8 +33,9 @@ from gconanpy.debug import Debuggable
 from gconanpy.IO.local import save_to_json
 from gconanpy.mapping import chain_get
 from gconanpy.mapping.dicts import DotDict, LazyDotDict
+from gconanpy.meta import cached_property
 from gconanpy.meta.typeshed import DATA_ERRORS
-from gconanpy.wrappers import stringify_iter
+from gconanpy.strings import stringify_iter
 
 # Import local custom libraries
 try:
@@ -82,7 +83,7 @@ class GCPAuth(Debuggable):
         :return: Dict[str, Any] representing this instance. Passing it into \
             from_authorized_user_info() makes a new credential instance.
         """
-        jsonified = dict()
+        jsonified = {}
         for key in cls.KEYS:
 
             if key not in strip:  # Don't add explicitly excluded entries
@@ -158,7 +159,6 @@ class GCPAuth(Debuggable):
 
 
 class GoogleSheet(LazyDotDict, Debuggable):
-    df: pd.DataFrame
 
     def __init__(self, sheet_ID: str, worksheet_name: str,
                  creds: GCPAuth.CREDS_TYPE,
@@ -187,26 +187,9 @@ class GoogleSheet(LazyDotDict, Debuggable):
         except gspread.exceptions.GSpreadException as err:
             self.debug_or_raise(err, locals())
 
-    def get_df(self, *args, **kwargs) -> pd.DataFrame:
-        try:
-            df = self.lazysetdefault("df", self.make_df, args, kwargs,
-                                     exclude={None})
-        except TypeError as err:
-            self.debug_or_raise(err, locals())
-        return df
-
-    def make_df(self, *args, **kwargs) -> pd.DataFrame:
-        try:
-            df = pd.DataFrame(self.lazysetdefault(
-                "sheet", self.online_sheet.get_all_records,
-                args, kwargs, exclude={None}))
-        except (gspread.exceptions.GSpreadException, TypeError, ValueError
-                ) as err:
-            self.debug_or_raise(err, locals())
-        return df
-
 
 class JobsAppsSheetUpdater(GoogleSheet):
+    _SheetType = list[dict[str, int | float | str]]
     COL_NAMES = {"Date Applied": "date",
                  "Company": "company",
                  "Position": "name",
@@ -235,14 +218,13 @@ class JobsAppsSheetUpdater(GoogleSheet):
         :param debugging: bool, True to pause and interact on error, else \
             False to raise errors/exceptions; defaults to False.
         """
-
         # (GOOGLE_SERVICE_JSON, GOOGLE_SHEET_ID, GOOGLE_TOKEN_JSON, WORKSHEET_NAME)
         Debuggable.__init__(self, debugging)
         self.jobs_email = jobs_email
         self.relabel = relabel
 
-        self.new_rows: list[list[str]] = list()
-        self.updates: list[dict[str, str | list[list]]] = list()
+        self.new_rows: list[list[str]] = []
+        self.updates: list[dict[str, str | list[list]]] = []
 
         try:
             auth = GCPAuth(debugging=debugging)
@@ -271,37 +253,40 @@ class JobsAppsSheetUpdater(GoogleSheet):
         return cls(**config.get_subset_from_lookups(config_vars, sep, default),
                    debugging=debugging)
 
-    def make_df(self) -> pd.DataFrame:
+    @cached_property[_SheetType]
+    def sheet(self) -> _SheetType:
+        return self.online_sheet.get_all_records(
+            expected_headers=list[str](self.COL_NAMES))
+
+    @cached_property[pd.DataFrame]
+    def df(self) -> pd.DataFrame:
         try:
-            df = super(JobsAppsSheetUpdater, self).make_df(
-                expected_headers=self.COL_NAMES.keys()
-            ).rename(columns=self.COL_NAMES)
+            df = pd.DataFrame(self.sheet).rename(columns=self.COL_NAMES)
         except (gspread.exceptions.GSpreadException, TypeError, ValueError
                 ) as err:
             self.debug_or_raise(err, locals())
         return df
 
     def find_row_of_job(self, job: LinkedInJob) -> int:
-        details = dict()
+        details: dict[Hashable, list[Hashable]] = {}
         for detail_name in ("company", "name", "date"):
 
             detail = job.get(detail_name, None, {None})
             if detail is not None:
                 details[detail_name] = [job[detail_name], ]
 
-                short_name = f"short_{detail}"
+                short_name = f"short_{detail_name}"
                 shortened = job.get(short_name, None, {None})
                 if shortened is not None:
-                    cast(list, details[detail_name]).append(shortened)
-
-        df = try_filter_df(self.get_df(), details)
+                    details[detail_name].append(shortened)
+        df = try_filter_df(self.df, details)
 
         if len(df.index) > 1:
-            dates: pd.Series = self.lazysetdefault(
-                "date_col", pd.to_datetime, [self.df["date"]],
-                dict(yearfirst=True)).loc[df.index]
+            dates = cast(pd.Series, cast(pd.Series, self.lazysetdefault(
+                "date_col", pd.to_datetime, (), self.df["date"],
+                yearfirst=True)).loc[df.index])
             job_dt = dt.datetime.fromisoformat(job.date)
-            diffs = (dates - job_dt).abs()
+            diffs = cast(pd.Series, dates - job_dt).abs()
             df = df.loc[diffs.loc[diffs == diffs.min()].index]
 
         if len(df.index) != 1:
@@ -323,7 +308,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
         options.setdefault("value_input_option",
                            gspread.utils.ValueInputOption.user_entered)
         resp: dict[str, gspread.worksheet.JSONResponse] = \
-            dict(updates=dict(), new_rows=dict())
+            dict(updates={}, new_rows={})
         if self.updates:
             resp["updates"] = self.online_sheet.batch_update(
                 self.updates, **options)
@@ -339,9 +324,9 @@ class JobsAppsSheetUpdater(GoogleSheet):
         :param gmail: Gmailer, _description_
         :param how_many: int,_description_, defaults to 10
         """
-        job_updates = dict()
-        ignored = dict()
-        skipped = dict()
+        job_updates = {}
+        ignored = {}
+        skipped = {}
         for unread_job_email, msg_ID in gmail.get_emails_from(
             address=self.jobs_email, how_many=how_many, unread_only=True
         ):
@@ -350,7 +335,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
                 if self.MULTIPLE in unread_job_email["Subject"]:
                     try:
                         msg = LinkedInEmail(unread_job_email, body,
-                                            self.get_df(), self.debugging)
+                                            self.df, self.debugging)
                         for job_row, new_status in msg.get_updates():
                             self.update_status_of(job_row, new_status)
                         job_updates[msg_ID] = unread_job_email
@@ -364,7 +349,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
                     job_app_was = job.get("verb", False)
                     match job_app_was:
                         case "sent" | "applied":
-                            self.new_rows.append(job.toGoogleSheetsRow())
+                            self.new_rows.append(job.asGoogleSheetsRow)
                             job_updates[msg_ID] = unread_job_email
                         case "rejected" | "viewed":
                             self.update_status_of(self.find_row_of_job(job),
@@ -386,7 +371,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
                 if n_updates != len(self.updates):
                     raise ValueError("Incorrect number of updated rows.")
                 if self.relabel:
-                    for msg_ID in job_updates.keys():
+                    for msg_ID in job_updates:
                         gmail.move_msg(msg_ID, "Inbox", self.relabel)
             except (gspread.exceptions.GSpreadException, *DATA_ERRORS) as err:
                 skipped.update(job_updates)
@@ -410,6 +395,7 @@ class JobsAppsSheetUpdater(GoogleSheet):
     def print_summary(self, did_what_to: str,
                       messages: dict[bytes, EmailMessage]) -> None:
         if self.debugging:
-            msg_strs = stringify_iter([fail_msg["Subject"] for fail_msg
-                                       in messages.values()])
+            msg_strs = stringify_iter(
+                [msg["Subject"] for msg in messages.values()],
+                prefix=None, suffix=None)
             print(f"{did_what_to} these messages: {msg_strs}")

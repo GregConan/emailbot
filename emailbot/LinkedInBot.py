@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 
 """
+Nonfunctional WIP of a job app bot. 
 Greg Conan: gregmconan@gmail.com
 Created: 2025-02-12
-Updated: 2025-07-29
+Updated: 2026-03-05
 """
 # Import standard libraries
 import pdb
 import sys
-from typing import Any, Callable, Dict, Iterable, List, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from typing_extensions import Self
 
 # Import Selenium library
@@ -26,10 +27,10 @@ from webdriver_manager.firefox import GeckoDriverManager
 
 # Import remote custom libraries
 from gconanpy.debug import Debuggable
-from gconanpy.dissectors import Xray
+from gconanpy.access.nested import Xray
 from gconanpy.IO.local import save_to_json
 # from gconanpy.IO.web import extract_params_from_url
-from gconanpy.wrappers import ToString
+from gconanpy.wrappers import FancyString
 
 # Import local constants
 try:
@@ -167,7 +168,7 @@ class LinkedInBot(webdriver.Firefox, Debuggable):
                  saved successfully, or None if the operation failed
         """
         try:  # Write the page's HTML source code contents into new HTML file
-            path = ToString.filepath(
+            path = FancyString.filepath(
                 dir_path if dir_path else self.out_dir,  # type: ignore  # TODO
                 file_name if file_name else self.current_url,
                 ".html", put_date_after="_")
@@ -194,7 +195,7 @@ class LinkedInBot(webdriver.Firefox, Debuggable):
         if not dirpath:
             dirpath = self.out_dir
         fname = f"{__class__.__name__} screenshot "
-        fpath = ToString.filepath(
+        fpath = FancyString.filepath(
             dirpath,  # type: ignore  # TODO
             fname, ".png", put_date_after=" ")
         return fpath if self.save_full_page_screenshot(fpath) else None
