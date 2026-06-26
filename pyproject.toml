@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "emailbot"
-version = "0.6.0"
+version = "0.7.0"
 description = ""
 authors = ["Greg Conan <gregmconan@gmail.com>"]
 readme = "README.md"
@@ -10,16 +10,21 @@ python = "^3.10"
 cryptography = "^44.0.0"
 oauth2 = "^1.9.0.post1"
 beautifulsoup4 = "^4.12.3"
-selenium = "^4.28.1"
+selenium = "^4.33.0"
 webdriver-manager = "^4.0.2"
 pathvalidate = "^3.2.3"
 google-api-python-client = "^2.163.0"
 google-auth-httplib2 = "^0.2.0"
 google-auth-oauthlib = "^1.2.1"
 gspread = "^6.2.0"
-gconanpy = {git = "https://github.com/GregConan/gconanpy.git", rev = "v0.28.0"}
+gconanpy = {git = "https://github.com/GregConan/gconanpy.git", rev = "v0.33.1"}
 dask = {extras = ["dataframe"], version = "^2025.3.0"}
 xmltodict = "^0.14.2"
+pydantic-argparse = "^0.10.0"
+openai = "^2.30.0"
+html-to-markdown = "^3.0.0"
+openpyxl = "^3.1.5"
+markitdown = {extras = ["docx"], version = "^0.1.5"}
 
 
 [build-system]

@@ -4,7 +4,7 @@
 Class to update a Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-11
-Updated: 2026-03-05
+Updated: 2026-06-26
 """
 # Import standard libraries
 from collections.abc import Hashable, Iterable
@@ -12,11 +12,10 @@ import datetime as dt
 from email.message import EmailMessage
 import os
 import pdb
-from typing import Any, cast
-from typing_extensions import Self
+from typing import Any, cast, Self
 
 # Import third-party PyPI libraries
-import bs4
+# import bs4
 # import dask.dataframe as dd
 from google.auth.transport.requests import Request
 from google.oauth2.service_account import Credentials as OauthServiceCreds
@@ -35,17 +34,17 @@ from gconanpy.mapping import chain_get
 from gconanpy.mapping.dicts import DotDict, LazyDotDict
 from gconanpy.meta import cached_property
 from gconanpy.meta.typeshed import DATA_ERRORS
+from gconanpy.numpandas import try_filter_df
 from gconanpy.strings import stringify_iter
 
 # Import local custom libraries
 try:
-    from Gmailer import Gmailer
-    from LinkedInJob import \
-        LinkedInEmail, LinkedInJob, LinkedInJobFromMsg, try_filter_df
-except ModuleNotFoundError:
     from emailbot.Gmailer import Gmailer
     from emailbot.LinkedInJob import \
-        LinkedInEmail, LinkedInJob, LinkedInJobFromMsg, try_filter_df
+        LinkedInEmail, LinkedInJob, LinkedInJobFromMsg
+except ModuleNotFoundError:
+    from Gmailer import Gmailer
+    from LinkedInJob import LinkedInEmail, LinkedInJob, LinkedInJobFromMsg
 
 
 class GCPAuth(Debuggable):
@@ -125,9 +124,9 @@ class GCPAuth(Debuggable):
             creds = OauthServiceCreds.from_service_account_file(
                 serviceJSON, scopes=self.scopes)
 
-        # The file token.json stores the user's access and refresh tokens, and is
-        # created automatically when the authorization flow completes for the first
-        # time.
+        # The file token.json stores the user's access and refresh tokens,
+        # and is created automatically when the authorization flow completes
+        # for the first time.
         elif tokenJSON and os.path.exists(tokenJSON):
             creds = OauthCreds.from_authorized_user_file(
                 tokenJSON, self.scopes)
@@ -250,8 +249,8 @@ class JobsAppsSheetUpdater(GoogleSheet):
         :param config_vars: Mapping[str, str], _description_
         :return: _type_, _description_
         """
-        return cls(**config.get_subset_from_lookups(config_vars, sep, default),
-                   debugging=debugging)
+        return cls(**config.get_subset_from_lookups(
+            config_vars, sep, default), debugging=debugging)
 
     @cached_property[_SheetType]
     def sheet(self) -> _SheetType:
@@ -274,11 +273,17 @@ class JobsAppsSheetUpdater(GoogleSheet):
             detail = job.get(detail_name, None, {None})
             if detail is not None:
                 details[detail_name] = [job[detail_name], ]
-
                 short_name = f"short_{detail_name}"
                 shortened = job.get(short_name, None, {None})
                 if shortened is not None:
                     details[detail_name].append(shortened)
+
+        # Sometimes job app date can vary by a day
+        job_date = dt.date.fromisoformat(cast(str, details["date"][0]))
+        details["date"].append((job_date - dt.timedelta(days=1)
+                                ).isoformat())
+        
+        # pdb.set_trace()
         df = try_filter_df(self.df, details)
 
         if len(df.index) > 1:
@@ -371,19 +376,19 @@ class JobsAppsSheetUpdater(GoogleSheet):
                 if n_updates != len(self.updates):
                     raise ValueError("Incorrect number of updated rows.")
                 if self.relabel:
-                    for msg_ID in job_updates:
-                        gmail.move_msg(msg_ID, "Inbox", self.relabel)
+                    gmail.move_msg(",".join(job_updates), "Inbox",
+                                   self.relabel)
             except (gspread.exceptions.GSpreadException, *DATA_ERRORS) as err:
                 skipped.update(job_updates)
                 self.debug_or_raise(err, locals())
 
         if ignored:
             self.print_summary("Ignored", ignored)
-            gmail.mark_unread([ignored_msg_ID for ignored_msg_ID in ignored])
+            gmail.mark_unread(",".join(ignored))
 
         if skipped:
-            gmail.mark_unread([skipped_msg_ID for skipped_msg_ID in skipped])
-            self.print_summary("Failed to add jobs from", skipped)
+            gmail.mark_unread(",".join(skipped))
+            self.print_summary("Failed to update jobs sheet from", skipped)
             if self.debugging:
                 pdb.set_trace()
                 print("done")

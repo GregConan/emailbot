@@ -5,11 +5,12 @@ Class to insert a row with LinkedIn job application details into a \
     Google Sheets spreadsheet
 Greg Conan: gregmconan@gmail.com
 Created: 2025-03-16
-Updated: 2026-03-05
+Updated: 2026-06-26
 """
 # Import standard libraries
 from collections.abc import Generator, Iterable, Sequence
 import datetime as dt
+from email.header import decode_header
 from email.message import EmailMessage
 import pdb
 import re
@@ -106,16 +107,20 @@ class LinkedInJobNameRegex(list[re.Pattern]):
 
 
 ABBR = AttrMap[Abbreviations]()
-ABBR.COMPANY = Abbreviations(Technology="Tech", Solution="Soln")
+ABBR.COMPANY = Abbreviations(Technology="Tech", Solution="Soln",
+                             Environmental="Env")
 ABBR.JOB = Abbreviations(Senior="Sr", Junior="Jr", Experience="Exp",
-                         **{"with": "w/"})
+                         Application="App", Database="DB",
+                         **{"with": "w/", "Quality Assurance": "QA",
+                            "Machine Learning": "ML"}, Development="Dev",
+                         Administrator="Admin", Engineer="Eng")
 
 
 class LinkedInJobDetailParser(LinkedInJobNameRegex):
     APP_DATE_PREFIX = "Applied on "
     APP_DATE_FORMATS = ("%B %d, %Y", "%b %d", "%b %d, %Y", "%B %d")
     MSG_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S %z (%Z)"
-    UNNEEDED = (", Inc.", "Inc", "L.L.C", "LLC", "The")
+    UNNEEDED = (", Inc.", "Inc ", "Inc.", "L.L.C", "LLC", "The ")
 
     def parse_date_from(self, string: str, msg_date: dt.datetime
                         ) -> dt.date | None:
@@ -149,8 +154,17 @@ class LinkedInJobDetailParser(LinkedInJobNameRegex):
             email `msg`: the job name, the company that posted it, and/or \
             the job application status
         """
-        return Regextract.parse(self.EMAIL_SUBJECT,
-                                subject.replace("\r", ""))
+        subject = subject.replace("\r", "")
+        parsed = Regextract.parse(self.EMAIL_SUBJECT, subject)
+
+        # If email subject is too garbled to parse, clean it up and try again
+        if "company" not in parsed:
+            decoded, coder = decode_header(subject)[0]
+            fixed = cast(bytes, decoded).decode(cast(str, coder))
+            fixed = re.sub(r"[^\x00-\x7F]", "", fixed)
+            parsed = Regextract.parse(self.EMAIL_SUBJECT, fixed)
+
+        return parsed
 
     @classmethod
     def shorten_company(cls, name: str, max_len: int = 24) -> str:
@@ -169,7 +183,7 @@ class LinkedInJobDetailParser(LinkedInJobNameRegex):
         name, _ = Spliterator(max_len=max_len).spliterate(name.split())
         return FancyString(cls.normalize(name)).truncate(max_len, suffix="")
 
-    def shorten_name(self, name: str, max_len: int = 30) -> str:
+    def shorten_name(self, name: str, max_len: int = 36) -> str:
         """ Trim, truncate, rearrange, and abbreviate the name of a LinkedIn \
             job posting to remove unneeded details until the name fits into a \
             maximum length requirement.
@@ -180,15 +194,23 @@ class LinkedInJobDetailParser(LinkedInJobNameRegex):
         :return: str, the shortened LinkedIn job posting title/name
         """
         if len(name) > max_len:
+
+            # Remove extraneous words and find the most important (title) noun
             splitter = Spliterator(max_len=max_len)
             parts = [x for x in self.BOUND.split(name.strip())]
             name, title_found = splitter.spliterate(
                 parts, pop_ix=0, get_target=self.TITLE.search)
             title_noun = title_found.groups()[0] if title_found else ""
             name = self.remove_from(name, max_len, but_keep=title_noun)
+
+            # Abbreviate key terms
             name = ABBR.JOB.abbreviate(name, max_len)
             words = name.split()
+            if title_noun not in words:
+                title_noun = ABBR.JOB.shortenings[title_noun]
             title_noun_pos = words.index(title_noun) + 1 if title_noun else 1
+
+            # Remove extraneous grammar and more extraneous words
             name, _ = splitter.spliterate(words, min_parts=title_noun_pos)
             name, _ = splitter.spliterate(name.split(), pop_ix=0)
             name = self.normalize(name).strip()

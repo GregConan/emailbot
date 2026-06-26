@@ -4,79 +4,53 @@
 Nonfunctional WIP of a job app bot. 
 Greg Conan: gregmconan@gmail.com
 Created: 2025-02-12
-Updated: 2026-03-05
+Updated: 2026-05-03
 """
 # Import standard libraries
 import pdb
+import re
 import sys
-from typing import Any, Callable, Iterable, Mapping
-from typing_extensions import Self
+from typing import Any, Callable, Iterable, Mapping, Self
 
 # Import Selenium library
-from selenium import webdriver
+# from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.proxy import Proxy
+from selenium.webdriver.firefox.webdriver import WebDriver  # as FirefoxDriver
+# from selenium.webdriver.firefox.firefox_profile import FirefoxProfile
+from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as Expect
 from selenium.webdriver.support.ui import WebDriverWait
 
 # Import other third-party PyPI libraries
+import html_to_markdown as html2md
 from webdriver_manager.firefox import GeckoDriverManager
 
 # Import remote custom libraries
-from gconanpy.debug import Debuggable
 from gconanpy.access.nested import Xray
+from gconanpy.debug import Debuggable
 from gconanpy.IO.local import save_to_json
+from gconanpy.IO.web import URL
 # from gconanpy.IO.web import extract_params_from_url
-from gconanpy.wrappers import FancyString
+from gconanpy.reg import compress
+from gconanpy.strings import FancyString
+
 
 # Import local constants
 try:
-    from constants import FF_BIN, LINKEDIN_SEARCH
+    from emailbot.constants import LINKEDIN_SEARCH
 except ModuleNotFoundError:
-    from emailbot.constants import FF_BIN, LINKEDIN_SEARCH
+    from constants import LINKEDIN_SEARCH
 
 
-class FFOptions(FirefoxOptions):  # TODO Use FirefoxCapabilities instead?
-    def __init__(self, *arguments: Any,
-                 binary_location: str | None = FF_BIN,
-                 headless: bool = True, log_level: Any = None,
-                 profile_dir: str | None = None,
-                 proxy: Proxy | None = None,
-                 **preferences: Any) -> None:
-        super().__init__()
-
-        for arg in arguments:
-            self.add_argument(arg)
-
-        if binary_location:
-            self.binary_location = binary_location
-
-        self.headless = headless
-        if headless:
-            self.add_argument("-headless")  # Belt & suspenders
-
-        if log_level:
-            self.log.level = log_level
-
-        if profile_dir:
-            self.profile = webdriver.FirefoxProfile(profile_dir)
-            # self.add_argument("-profile")  # Belt & suspenders
-            # self.add_argument(profile_dir)
-
-        if proxy:
-            self.proxy = proxy
-
-        for name, value in preferences.items():
-            self.set_preference(name, value)
-
-
-class LinkedInBot(webdriver.Firefox, Debuggable):
+class LinkedInBot(WebDriver, Debuggable):
     def __init__(self, debugging: bool = False,
                  from_file_at: str | None = None, keep_alive: bool = True,
-                 options: FirefoxOptions = FFOptions(),
+                 options: FirefoxOptions | None = None,
+                 ff_service: FirefoxService | None = None,
                  out_dir_path: str | None = None) -> None:
         self.debugging = debugging
         self.out_dir = out_dir_path
@@ -89,10 +63,13 @@ class LinkedInBot(webdriver.Firefox, Debuggable):
             # .session_id is already defined
 
             # new_gecko = GeckoDriverManager().install()
+            if not ff_service:
+                new_gecko = GeckoDriverManager().install()
+                ff_service = FirefoxService(new_gecko, log_output=out_log)
             # ff_service = FirefoxService(FF_BIN, log_output=out_log)  # new_gecko,
 
-            pdb.set_trace()
-            super().__init__(options=options,  # service=ff_service,
+            # pdb.set_trace()
+            super().__init__(options=options, service=ff_service,
                              keep_alive=keep_alive)
 
             self.wait = WebDriverWait(self, 30)
@@ -109,37 +86,69 @@ class LinkedInBot(webdriver.Firefox, Debuggable):
         pdb.set_trace()
         pass  # TODO
 
+    def get_job_desc(self) -> str | None:
+        outfpath = None
+
+        # Get "About the job" h2 element, which has the job desc after it
+        job_desc_header = None
+        for header2 in self.find_elements(By.TAG_NAME, "h2"):
+            if header2.text.strip() == "About the job":
+                job_desc_header = header2
+
+        # Find the element containing the whole job description by iteratively
+        # getting parents of title until one of them has text besides the title
+        if job_desc_header is not None:
+            parent = job_desc_header
+            while parent.text.strip() == "About the job":
+                parent = parent.find_element(By.XPATH, "..")
+
+            # Step down into job description text to get the description
+            job_desc_el = parent.find_element(By.TAG_NAME, "p")
+            job_desc_html = job_desc_el.get_attribute("outerHTML")
+
+            # Convert job description HTML to Markdown, then save it to .md 
+            if job_desc_html:
+                converted = html2md.convert(job_desc_html)["content"]
+                if converted:
+                    job_desc_md = compress(converted)
+                    print(job_desc_md)
+                    jobID = URL(self.current_url).params["currentJobId"][0]
+                    outfpath = FancyString.filepath(
+                        self.out_dir if self.out_dir else ".",
+                        f"job-desc-{jobID}", ".md", put_date_after="_")
+                    written = 0
+                    with open(outfpath, "w+") as outfile:
+                        written = outfile.write(job_desc_md)
+                    if written == 0:
+                        outfpath = None
+
+        return outfpath
+
+
     def iterate_jobs_at(self, linkedin_search_URL: str = LINKEDIN_SEARCH):
+        
+        WebDriverWait(self, 1)  # Wait to avoid seeming automated?
         self.get(linkedin_search_URL)
-        self.wait.until(Expect.visibility_of_element_located(
-            "job-details"))  # type: ignore  # TODO
+        WebDriverWait(self, 1)  # Wait to avoid seeming automated?
 
         # Save entire HTML source document into local text file for testing
         if self.debugging:
             src_fpath = self.save_source_code()
-            pdb.set_trace()
 
-        job_cards = self.find_elements(By.CSS_SELECTOR, "div[data-job-id]")
-        for job_card in job_cards:
-            # TODO If the card isn't for the displayed job, click the card
-            card_job_ID = job_card.get_dom_attribute('data-job-id')
-            # url_params = extract_params_from_url(linkedin_search_URL)
-            # url_job_ID = linkedin_search_URL[""]
+        job_descs = [self.get_job_desc()]
+        # TODO ITERATE MORE JOBS
 
-            job_details = self.find_element(
-                by=By.CLASS_NAME, value="jobs-details__main-content")
-
-            # Once the card is clicked, get key details from job description
-            self.get_job_details_of(job_details)  # TODO
 
     def login(self, username: str, password: str):
 
         self.get("http://www.linkedin.com/login")
-        self.when_ready_click(By.ID, "username").send_keys(username)
+        self.wait.until(Expect.visibility_of_element_located(
+            (By.ID, "username"))).send_keys(username)
+        # self.when_ready_click(By.ID, "username").send_keys(username)
         self.when_ready_click(By.ID, "password").send_keys(password)
 
-        self.wait.until(Expect.element_to_be_clickable((
-            By.CSS_SELECTOR, "button[type=submit]"))).click()
+        self.when_ready_click(By.CSS_SELECTOR, "button[type=submit]").click()
+        # self.wait.until(Expect.element_to_be_clickable((By.CSS_SELECTOR, "button[type=submit]"))).click()
         # self.find_element(By.CSS_SELECTOR, "button[type=submit]").click()
         # wait.until(Expect.element_to_be_clickable((By.XPATH, "//button[text()='Sign in']"))).click()
         if self.debugging:

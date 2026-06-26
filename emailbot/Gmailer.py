@@ -4,7 +4,7 @@
 Class to connect to a Gmail account and fetch emails from it
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-24
-Updated: 2026-03-05
+Updated: 2026-03-09
 """
 # Import standard libraries
 from collections.abc import Iterable, Mapping
@@ -265,26 +265,30 @@ class Gmailer(Debuggable):
         except TypeError as err:
             self.debug_or_raise(err, locals())
 
-    def mark_unread(self, msgIDs: Iterable[str]) -> None:
-        for msgID in msgIDs:
-            try:
-                self.con.store(msgID, "-FLAGS", "\\Seen")
-            except imaplib.IMAP4.error as err:
-                self.debug_or_raise(err, locals())
+    def mark_unread(self, msgIDs: str) -> None:
+        """ Mark all email messages with ID numbers in `msgIDs` as unread. 
 
-    def move_msg(self, msgID: str, move_from: str, move_to: str) -> None:
+        :param msgIDs: str, comma-separated message ID numbers
+        """
+        try:
+            self.con.store(msgIDs, "-FLAGS", "\\Seen")
+        except imaplib.IMAP4.error as err:
+            self.debug_or_raise(err, locals())
+
+    def move_msg(self, msgIDs: str, move_from: str, move_to: str) -> None:
         """ Transfer message from one Gmail box to a different one(/label).
         Instead of "removing" the original label, it deletes the email from \
         the label, since labels act like folders in Gmail. Adapted from \
         https://www.reddit.com/r/learnpython/comments/ckqrac/comment/evqjy5k
 
-        :param move_from: str, _description_
-        :param move_to: str, _description_
+        :param msgIDs: str, comma-separated message ID numbers
+        :param move_from: str, name of the folder/label to remove messages from
+        :param move_to: str, name of the folder/label to add messages to
         """
         try:
             self.con.select(move_from)
-            self.con.store(msgID, "+X-GM-LABELS", f"({move_to})")
-            self.con.store(msgID, "+FLAGS", "\\Deleted")
+            self.con.store(msgIDs, "+X-GM-LABELS", f"({move_to})")
+            self.con.store(msgIDs, "+FLAGS", "\\Deleted")
         except imaplib.IMAP4.error as err:
             self.debug_or_raise(err, locals())
 

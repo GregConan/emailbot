@@ -4,7 +4,7 @@
 Gmail Bot
 Greg Conan: gregmconan@gmail.com
 Created: 2025-01-23
-Updated: 2026-02-23
+Updated: 2026-04-15
 """
 # Import standard libraries
 from configparser import ConfigParser
@@ -13,21 +13,88 @@ from glob import glob
 import os
 import pdb
 import sys
+from typing import Annotated, cast, get_args, Literal, TypeVar
+
+# Import third-party PyPI libraries
+import pydantic
 
 # Import remote custom libraries
 from gconanpy.access.nested import Xray
+from gconanpy.cli import ArgumentParser, Arg, OutputDirArg, Valid
 from gconanpy.debug import ShowTimeTaken
 from gconanpy.mapping.dicts import LazyDotDict, SubCryptionary
-from gconanpy.wrappers import ArgParser, Valid
 
 # Import local custom libraries
 from emailbot.Gmailer import Gmailer
 from emailbot.GoogleSheetUpdater import JobsAppsSheetUpdater
-from emailbot.LinkedInBot import FFOptions, LinkedInBot
+from emailbot.LinkedInBot import LinkedInBot
+
+# Type variables for command-line input argument parsing
+_RunMode = Literal["gmail", "linkedin"]
+
+# CLIArgs variables
+DEFAULT_CONFIG = "config.ini"
+MSG_CRED = ("Your account {0}. If you don't include this argument, "
+            "then you will be prompted to enter your {0} manually.")
+RUN_MODES = get_args(_RunMode)
+
+
+class CLIArgs(pydantic.BaseModel):
+    """ Command-line input parameters saved into a custom dict class with extra
+        functionality. All input parameters' types are explicitly defined here
+        for static type checking/highlighting/etc. """
+    # Required Arg
+    run_mode: Annotated[_RunMode, pydantic.Field(), Arg(
+        "run_mode", choices=RUN_MODES, help_msg=(
+            "Modes to run this script in. Enter 'gmail' to access Gmail "
+            "account, or 'linkedin' to access LinkedIn account."))]
+
+    # Optional Args
+    address: Annotated[str | None, pydantic.Field(), Arg(
+        "address", "-e", "-email", "--email", "--address", "--email-address",
+        metavar="EMAIL_ADDRESS",
+        help=MSG_CRED.format("address"))]
+
+    configs: Annotated[list[str], pydantic.Field(), Arg(
+        "configs", "-c", "-config", "--config", "--config-file-paths",
+        "--config-file", type=Valid.readable_file, default=[DEFAULT_CONFIG],
+        metavar="PATHS_TO_CONFIG_FILES", nargs="*", help_msg=(
+            "Paths to valid readable config files defining values of "
+            "important variables for this script to use. See `README.md` "
+            "for an example config file. By default, this script will try "
+            "to read from " + os.path.join(os.getcwd(), DEFAULT_CONFIG)))]
+
+    debugging: Annotated[bool, pydantic.Field(), Arg(
+        "debugging", "-d", "-debug", "--debug", "--debugging",
+        default=False, action="store_true", help_msg=(
+            "Include this flag to interactively debug on error instead of "
+            "exiting the program."))]
+
+    how_many: Annotated[int | None, pydantic.Field(), Arg(
+        "how_many", "-n", "--number", "--count", "--n-emails", "--how-many",
+        type=Valid.whole_number,
+        help_msg=("Number of emails/jobs to fetch/check")
+    )]
+
+    output: Annotated[str, pydantic.Field(), OutputDirArg()]
+
+    password: Annotated[str | None, pydantic.Field(), Arg(
+        "password", "-p", "-pass", "--password",
+        help_msg=MSG_CRED.format("password")
+    )]
+
+    ff_profile: Annotated[str | None, pydantic.Field(), Arg(
+        "ff_profile", "-fp", "-profile", "--profile", "--ff-profile",
+        "--profile-path", metavar="FIREFOX_PROFILE_PATH"
+        # type=Valid.readable_file
+    )]
 
 
 def main():
-    cli_args = get_cli_args()
+    parser = ArgumentParser("Python script(s) to interact with "
+                            "Gmail, Google Sheets and LinkedIn.")
+    cli_args = parser.parse_args_to_model(CLIArgs)
+    # cli_args = get_cli_args()
 
     config = ConfigParser()
     config.read(cli_args.configs)
@@ -59,86 +126,22 @@ def main():
                 updater.sort_job_apps_from_gmail(gmail, cli_args.how_many)
 
         case "linkedin":
-            options = FFOptions(  # "--safe-mode", "--allow-downgrade",
-                profile_dir=cli_args.ff_profile,
-                headless=True)
+            # Make a TMPDIR to avoid Firefox crashing
+            # tmp_dir = os.path.join(os.getcwd(), "tmp")
+            os.environ["TMPDIR"] = cli_args.output
+            # os.makedirs(tmp_dir, exist_ok=True)
+
             with LinkedInBot(debugging=cli_args.debugging,
-                             options=options,
                              out_dir_path=cli_args.output) as bot:
-                pdb.set_trace()
+                bot = cast(LinkedInBot, bot)  # else assumes it's a WebDriver
+                # pdb.set_trace()
                 bot.login(creds["address"], creds["password"])
+                bot.iterate_jobs_at()
                 pdb.set_trace()
                 print("done")
 
 
-def get_cli_args(parser: ArgParser | None = None) -> LazyDotDict:
-    """
-    :param parser: argparse.ArgumentParser to get command-line input arguments
-    :return: LazyDotDict[str, Any], all arguments collected from the command line
-    """
-    DEFAULT_CONFIG = "config.ini"
-    MSG_CRED = ("Your account {0}. If you don't include this argument, "
-                "then you will be prompted to enter your {0} manually.")
-    RUN_MODES = ("gmail", "linkedin")
-
-    # Collect command-line input arguments
-    if not parser:
-        parser = ArgParser("Python script(s) to interact with "
-                           "Gmail, Google Sheets and LinkedIn.")
-    parser.add_argument(
-        "run_mode",  # "-m", "-mode", "--run-mode",
-        choices=RUN_MODES,
-        help=("Modes to run this script in. Enter 'gmail' to access Gmail "
-              "account, or 'linkedin' to access LinkedIn account.")
-    )
-    parser.add_argument(
-        "-c", "-config", "--config", "--config-file", "--config-file-paths",
-        default=DEFAULT_CONFIG,
-        dest="configs",
-        metavar="PATHS_TO_CONFIG_FILES",
-        nargs="*",
-        type=Valid.readable_file,
-        help=("Paths to valid readable config files defining values of "
-              "important variables for this script to use. See `README.md` "
-              "for an example config file. By default, this script will try "
-              "to read from " + os.path.join(os.getcwd(), DEFAULT_CONFIG))
-    )
-    parser.add_argument(
-        "-d", "-debug", "--debug", "--debugging",
-        action="store_true",
-        dest="debugging",
-        help=("Include this flag to interactively debug on error instead of "
-              "exiting the program.")
-    )
-    parser.add_argument(
-        "-e", "-email", "--email", "--address", "--email-address",
-        dest="address",
-        metavar="EMAIL_ADDRESS",
-        help=MSG_CRED.format("address")
-    )
-    parser.add_new_out_dir_arg("out", dest="output",
-                               metavar="OUTPUT_DIRECTORY")
-    parser.add_argument(
-        "-n", "--number", "--count", "--n-emails", "--how-many",
-        dest="how_many",
-        type=Valid.whole_number,
-        help=("Number of emails/jobs to fetch/check")
-    )
-    parser.add_argument(
-        "-p", "-pass", "--password",
-        dest="password",
-        help=MSG_CRED.format("password")
-    )
-    parser.add_argument(
-        "-fp", "-profile", "--profile", "--ff-profile", "--profile-path",
-        dest="ff_profile",
-        metavar="FIREFOX_PROFILE_PATH"
-        # type=Valid.readable_file
-    )
-    return LazyDotDict(vars(parser.parse_args()))
-
-
-def get_credentials(cli_args: LazyDotDict, config: LazyDotDict,
+def get_credentials(cli_args: CLIArgs, config: LazyDotDict,
                     **config_paths: str) -> SubCryptionary:
     """
     :param parser: argparse.ArgumentParser to get command-line input arguments
@@ -146,10 +149,11 @@ def get_credentials(cli_args: LazyDotDict, config: LazyDotDict,
     """
     # Save credentials and settings into a custom encrypted dictionary
     try:
-        cli_args.setdefaults(**config.get_subset_from_lookups(config_paths),
-                             exclude={None})
+        args_dict = LazyDotDict(cli_args.model_dump())
+        args_dict.setdefaults(**config.get_subset_from_lookups(config_paths),
+                              exclude={None})
         creds = SubCryptionary.from_subset_of(  # TODO use Locktionary?
-            cli_args, keys_are=("address", "debugging", "password"),
+            args_dict, keys_are=("address", "debugging", "password"),
             values_arent=None)
 
         # Prompt user for Gmail credentials if they didn't provide them as
@@ -160,7 +164,7 @@ def get_credentials(cli_args: LazyDotDict, config: LazyDotDict,
         creds.setdefault_or_prompt_for(
             "password", PROMPT % "password", getpass, exclude={None})
     except KeyError as err:
-        pdb.set_trace()
+        # pdb.set_trace()
         if cli_args.debugging:
             pdb.set_trace()
             print()
